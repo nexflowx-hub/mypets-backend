@@ -1,0 +1,36 @@
+name: Deploy Supabase Production
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: Validate secrets
+        run: |
+          set -euo pipefail
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          test -n "$SUPABASE_DB_PASSWORD"
+          test -n "$SUPABASE_PROJECT_ID"
+      - name: Initialize CLI metadata
+        run: |
+          test -f supabase/config.toml || supabase init
+      - name: Link production project
+        run: supabase link --project-ref "$SUPABASE_PROJECT_ID"
+      - name: Preview migration
+        run: supabase db push --dry-run
+      - name: Apply migration
+        run: supabase db push
