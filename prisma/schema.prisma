@@ -1,0 +1,108 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Story {
+  id            String         @id @default(uuid()) @db.Uuid
+  slug          String         @unique
+  kind          String
+  name          String
+  location      String?
+  country       String
+  currency      String
+  descPtPT      String         @map("desc_pt_pt")
+  descPtBR      String         @map("desc_pt_br")
+  descEn        String         @map("desc_en")
+  image         String
+  imageAlt      String         @map("image_alt")
+  tags          Json           @default("[]")
+  targetCents   Int            @map("target_cents")
+  raisedCents   Int            @default(0) @map("raised_cents")
+  isDemo        Boolean        @default(true) @map("is_demo")
+  active        Boolean        @default(true)
+  sortOrder     Int            @default(0) @map("sort_order")
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+  contributions Contribution[]
+
+  @@map("stories")
+}
+
+model ImpactMetric {
+  id        String  @id @default(uuid()) @db.Uuid
+  key       String  @unique
+  value     Float
+  prefix    String?
+  suffix    String?
+  decimals  Int     @default(0)
+  labelPtPT String  @map("label_pt_pt")
+  labelPtBR String  @map("label_pt_br")
+  labelEn   String  @map("label_en")
+  icon      String
+  color     String
+  isDemo    Boolean @default(true) @map("is_demo")
+  sortOrder Int     @default(0) @map("sort_order")
+
+  @@map("impact_metrics")
+}
+
+model NewsletterSubscriber {
+  id        String   @id @default(uuid()) @db.Uuid
+  email     String   @unique
+  locale    String   @default("pt-PT")
+  consent   Boolean  @default(false)
+  isDemo    Boolean  @default(false) @map("is_demo")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("newsletter_subscribers")
+}
+
+model Contribution {
+  id             String   @id @default(uuid()) @db.Uuid
+  storyId        String?  @map("story_id") @db.Uuid
+  story          Story?   @relation(fields: [storyId], references: [id], onDelete: SetNull)
+  targetType     String   @map("target_type")
+  targetLabel    String   @map("target_label")
+  amountCents    Int      @map("amount_cents")
+  currency       String
+  frequency      String
+  donorName      String?  @map("donor_name")
+  donorEmail     String?  @map("donor_email")
+  provider       String   @default("mock")
+  providerRef    String?  @map("provider_ref")
+  status         String   @default("PENDING")
+  idempotencyKey String   @unique @map("idempotency_key")
+  isDemo         Boolean  @default(true) @map("is_demo")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([storyId], map: "contributions_story_idx")
+  @@index([status], map: "contributions_status_idx")
+  @@map("contributions")
+}
+
+model Report {
+  id        String   @id @default(uuid()) @db.Uuid
+  reason    String
+  entityUrl String?  @map("entity_url")
+  email     String?
+  status    String   @default("OPEN")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("reports")
+}
+
+model ContentBlock {
+  id        String   @id @default(uuid()) @db.Uuid
+  key       String   @unique
+  value     Json
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("content_blocks")
+}
