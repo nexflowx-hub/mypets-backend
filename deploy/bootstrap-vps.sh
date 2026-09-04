@@ -51,26 +51,28 @@ case "$DB_URL" in
 esac
 
 umask 077
-printf '%s\n' \
-  'APP_ENV=production' \
-  'APP_VERSION=0.1.0' \
-  'HOST=0.0.0.0' \
-  'PORT=8081' \
-  "DATABASE_URL=$DB_URL" \
-  "DIRECT_URL=$DB_URL" \
-  'CORS_ORIGINS=https://mypets.lat,https://www.mypets.lat' \
-  'SHOW_DEMO_IMPACT=true' \
-  'PAYMENT_PROVIDER=mock' \
-  'PAYMENTS_LIVE=false' \
-  'PAYOUTS_ENABLED=false' \
-  'LOG_LEVEL=info' \
-  > "$ENV_DIR/api.env"
+{
+  printf '%s\n' 'APP_ENV=production'
+  printf '%s\n' 'APP_VERSION=0.1.0'
+  printf '%s\n' 'HOST=0.0.0.0'
+  printf '%s\n' 'PORT=8081'
+  printf 'DATABASE_URL=%s\n' "$DB_URL"
+  printf 'DIRECT_URL=%s\n' "$DB_URL"
+  printf '%s\n' 'CORS_ORIGINS=https://mypets.lat,https://www.mypets.lat'
+  printf '%s\n' 'SHOW_DEMO_IMPACT=true'
+  printf '%s\n' 'PAYMENT_PROVIDER=mock'
+  printf '%s\n' 'PAYMENTS_LIVE=false'
+  printf '%s\n' 'PAYOUTS_ENABLED=false'
+  printf '%s\n' 'LOG_LEVEL=info'
+} > "$ENV_DIR/api.env"
 chmod 600 "$ENV_DIR/api.env"
+unset DB_URL
 
 log "Creating isolated MyPets edge network if needed"
 docker network inspect "$EDGE_NETWORK" >/dev/null 2>&1 || docker network create "$EDGE_NETWORK" >/dev/null
 
 log "Applying canonical Supabase schema and demo seed"
+DB_URL="$(sed -n 's/^DIRECT_URL=//p' "$ENV_DIR/api.env")"
 docker run --rm \
   -e DIRECT_URL="$DB_URL" \
   -v "$APP_DIR/supabase:/sql:ro" \
@@ -139,10 +141,29 @@ if ! docker exec "$CADDY_CONTAINER" caddy validate --config /etc/caddy/Caddyfile
   fail "New Caddy configuration invalid; original Caddyfile restored"
 fi
 
-log "Reloading Caddy without restarting AtlasWallet"
-docker exec "$CADDY_CONTAINER" caddy reload --config /etc/caddy/Caddyfile
+log "Applying Caddy configuration"
+if docker exec "$CADDY_CONTAINER" caddy reload --config /etc/caddy/Caddyfile 2>/tmp/mypets-caddy-reload.err; then
+  log "Caddy reloaded via admin API"
+else
+  cat /tmp/mypets-caddy-reload.err >&2 || true
+  log "Admin API unavailable; sending SIGUSR1 to reload the startup Caddyfile"
+  docker kill --signal=USR1 "$CADDY_CONTAINER" >/dev/null
+  sleep 3
 
-log "Final local checks"
+  if docker logs --since 10s "$CADDY_CONTAINER" 2>&1 | grep -qiE 'reload|config|adapted|serving'; then
+    log "Caddy accepted reload signal"
+  else
+    log "Could not confirm signal-based reload; restarting only the Caddy container"
+    docker restart "$CADDY_CONTAINER" >/dev/null
+    sleep 3
+  fi
+fi
+rm -f /tmp/mypets-caddy-reload.err
+
+log "Verifying Caddy is running"
+[ "$(docker inspect -f '{{.State.Running}}' "$CADDY_CONTAINER")" = "true" ] || fail "Caddy container is not running"
+
+log "Final internal checks"
 docker ps --filter name=mypets-api --format 'table {{.Names}}\t{{.Status}}\t{{.Networks}}'
 docker run --rm --network "$EDGE_NETWORK" curlimages/curl:8.12.1 -fsS "http://$API_CONTAINER:8081/v1/stories" >/dev/null
 echo "Internal API check: OK"
