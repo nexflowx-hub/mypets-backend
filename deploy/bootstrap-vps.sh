@@ -51,37 +51,32 @@ case "$DB_URL" in
 esac
 
 umask 077
-cat > "$ENV_DIR/api.env" <<ENVEOF
-APP_ENV=production
-APP_VERSION=0.1.0
-HOST=0.0.0.0
-PORT=8081
-DATABASE_URL=$DB_URL
-DIRECT_URL=$DB_URL
-CORS_ORIGINS=https://mypets.lat,https://www.mypets.lat
-SHOW_DEMO_IMPACT=true
-PAYMENT_PROVIDER=mock
-PAYMENTS_LIVE=false
-PAYOUTS_ENABLED=false
-LOG_LEVEL=info
-ENVEOF
+printf '%s\n' \
+  'APP_ENV=production' \
+  'APP_VERSION=0.1.0' \
+  'HOST=0.0.0.0' \
+  'PORT=8081' \
+  "DATABASE_URL=$DB_URL" \
+  "DIRECT_URL=$DB_URL" \
+  'CORS_ORIGINS=https://mypets.lat,https://www.mypets.lat' \
+  'SHOW_DEMO_IMPACT=true' \
+  'PAYMENT_PROVIDER=mock' \
+  'PAYMENTS_LIVE=false' \
+  'PAYOUTS_ENABLED=false' \
+  'LOG_LEVEL=info' \
+  > "$ENV_DIR/api.env"
 chmod 600 "$ENV_DIR/api.env"
-unset DB_URL
 
 log "Creating isolated MyPets edge network if needed"
 docker network inspect "$EDGE_NETWORK" >/dev/null 2>&1 || docker network create "$EDGE_NETWORK" >/dev/null
 
 log "Applying canonical Supabase schema and demo seed"
-set -a
-# shellcheck disable=SC1090
-source "$ENV_DIR/api.env"
-set +a
 docker run --rm \
-  -e DIRECT_URL="$DIRECT_URL" \
+  -e DIRECT_URL="$DB_URL" \
   -v "$APP_DIR/supabase:/sql:ro" \
   postgres:16-alpine \
   sh -ec 'psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f /sql/migrations/20260904193000_init.sql && psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f /sql/seed.sql'
-unset DATABASE_URL DIRECT_URL
+unset DB_URL
 
 log "Building and starting MyPets API"
 docker compose -p mypets -f "$COMPOSE_FILE" up -d --build
