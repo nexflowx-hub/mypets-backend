@@ -1,0 +1,27 @@
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: mypets-backend:latest
+    container_name: mypets-api
+    restart: unless-stopped
+    env_file:
+      - /srv/apps/mypets/env/api.env
+    networks:
+      - mypets_internal
+      - mypets_edge
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8081/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+networks:
+  mypets_internal:
+    name: mypets_internal
+    driver: bridge
+  mypets_edge:
+    name: mypets_edge
+    external: true
