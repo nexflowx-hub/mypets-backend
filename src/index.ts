@@ -10,6 +10,7 @@ import { registerCoreRoutes } from "./core-routes.js";
 import { registerIdentityRoutes } from "./identity-routes.js";
 import { registerGrowthRoutes } from "./growth-routes.js";
 import { registerGrowthConversionRoutes } from "./growth-conversion-routes.js";
+import { registerCauseRoutes } from "./cause-routes.js";
 
 const prisma = new PrismaClient();
 const app = Fastify({ logger: true, trustProxy: true });
@@ -43,7 +44,7 @@ const publicDemoContent = process.env.PUBLIC_DEMO_CONTENT === "true";
 app.get("/", async () => ({
   service: "mypets-api",
   status: "ok",
-  version: process.env.APP_VERSION ?? "0.4.0",
+  version: process.env.APP_VERSION ?? "0.5.0",
 }));
 
 app.get("/health", async (_req, reply) => {
@@ -112,6 +113,7 @@ app.get("/v1/config", async () => ({
     payoutsEnabled: process.env.PAYOUTS_ENABLED === "true",
     authEnabled: Boolean(process.env.SUPABASE_URL && (process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY)),
     growthEnabled: true,
+    causesEnabled: true,
   },
 }));
 
@@ -220,6 +222,7 @@ await registerCoreRoutes(app, prisma);
 await registerIdentityRoutes(app, prisma);
 await registerGrowthRoutes(app, prisma);
 await registerGrowthConversionRoutes(app, prisma);
+await registerCauseRoutes(app, prisma);
 
 app.setErrorHandler((error, _req, reply) => {
   app.log.error(error);
