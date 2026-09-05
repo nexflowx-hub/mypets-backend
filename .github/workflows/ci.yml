@@ -35,6 +35,7 @@ jobs:
       PAYOUTS_ENABLED: "false"
       SUPABASE_URL: https://example.supabase.co
       SUPABASE_PUBLISHABLE_KEY: test_publishable_key
+      ADMIN_EMAILS: admin@example.com
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -55,6 +56,7 @@ jobs:
       - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260905050500_identity_roles.sql
       - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260905054000_growth_funnels.sql
       - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260905060000_causes_sponsorships.sql
+      - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260905150000_admin_claim_center.sql
       - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/seed.sql
       - run: npm run typecheck
       - run: npm run build
