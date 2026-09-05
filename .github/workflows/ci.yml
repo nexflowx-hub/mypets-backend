@@ -67,10 +67,20 @@ jobs:
             owner_id text
           );
           alter table storage.objects enable row level security;
-          create or replace function storage.foldername(name text) returns text[]
-          language sql immutable as $$ select string_to_array(trim(both '/' from name), '/')[1:greatest(array_length(string_to_array(trim(both '/' from name), '/'), 1)-1,0)] $$;
-          create or replace function storage.extension(name text) returns text
-          language sql immutable as $$ select case when position('.' in reverse(name)) > 0 then reverse(split_part(reverse(name), '.', 1)) else '' end $$;
+          create or replace function storage.foldername(object_name text) returns text[]
+          language sql immutable as $$
+            select case
+              when position('/' in object_name) = 0 then array[]::text[]
+              else string_to_array(regexp_replace(object_name, '/[^/]*$', ''), '/')
+            end
+          $$;
+          create or replace function storage.extension(object_name text) returns text
+          language sql immutable as $$
+            select case
+              when object_name ~ '\\.[^./]+$' then regexp_replace(object_name, '^.*\\.', '')
+              else ''
+            end
+          $$;
           SQL
       - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260904193000_init.sql
       - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260905033000_core_platform.sql
