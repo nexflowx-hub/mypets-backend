@@ -10,6 +10,13 @@ function strings(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
+function publicSocialLinks(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).filter(([, url]) => typeof url === "string" && /^https?:\/\//i.test(url)) as Array<[string, string]>
+  );
+}
+
 export async function registerIdentityRoutes(app: FastifyInstance, prisma: PrismaClient) {
   app.get("/v1/me/participation", async (req, reply) => {
     const user = await requireAuth(req, reply);
@@ -97,5 +104,17 @@ export async function registerIdentityRoutes(app: FastifyInstance, prisma: Prism
         skills: strings(volunteer.skills),
       },
     };
+  });
+
+  app.get("/v1/protectors/:slug/social-links", async (req, reply) => {
+    const params = z.object({ slug: z.string().min(2).max(120) }).safeParse(req.params);
+    if (!params.success) return reply.code(400).send({ error: { code: "INVALID_SLUG", message: "Invalid protector slug" } });
+
+    const protector = await prisma.protector.findFirst({
+      where: { slug: params.data.slug, isPublic: true, status: "ACTIVE" },
+      select: { socialLinks: true },
+    });
+    if (!protector) return reply.code(404).send({ error: { code: "NOT_FOUND", message: "Protector not found" } });
+    return { data: publicSocialLinks(protector.socialLinks) };
   });
 }
