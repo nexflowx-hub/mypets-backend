@@ -8,6 +8,7 @@ import { PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { registerCoreRoutes } from "./core-routes.js";
 import { registerIdentityRoutes } from "./identity-routes.js";
+import { registerGrowthRoutes } from "./growth-routes.js";
 
 const prisma = new PrismaClient();
 const app = Fastify({ logger: true, trustProxy: true });
@@ -41,7 +42,7 @@ const publicDemoContent = process.env.PUBLIC_DEMO_CONTENT === "true";
 app.get("/", async () => ({
   service: "mypets-api",
   status: "ok",
-  version: process.env.APP_VERSION ?? "0.3.0",
+  version: process.env.APP_VERSION ?? "0.4.0",
 }));
 
 app.get("/health", async (_req, reply) => {
@@ -109,6 +110,7 @@ app.get("/v1/config", async () => ({
     paymentsLive: process.env.PAYMENTS_LIVE === "true",
     payoutsEnabled: process.env.PAYOUTS_ENABLED === "true",
     authEnabled: Boolean(process.env.SUPABASE_URL && (process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY)),
+    growthEnabled: true,
   },
 }));
 
@@ -215,6 +217,7 @@ app.post("/v1/reports", async (req, reply) => {
 
 await registerCoreRoutes(app, prisma);
 await registerIdentityRoutes(app, prisma);
+await registerGrowthRoutes(app, prisma);
 
 app.setErrorHandler((error, _req, reply) => {
   app.log.error(error);
