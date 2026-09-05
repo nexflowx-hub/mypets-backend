@@ -1,0 +1,15 @@
+# MyPets initial public-web discovery seeds
+# Format: COUNTRY|CITY|URL
+# These URLs are discovery inputs only. They MUST NOT be presented as verified MyPets causes
+# until human review and owner claim/confirmation are complete.
+
+PT||https://www.focinhosebigodes.pt/
+PT||https://animaisdonossocoracao.pt/
+PT||https://abra.org.pt/
+BR|Marau|https://www.adotarmarau.com.br/
+BR|Bauru|https://arcadafe.ong.br/
+BR||https://www.viralate.com.br/contato/
+BR|Jaú|https://apaja.org.br/
+BR|São Paulo|https://arcabrasil.org.br/
+BR||https://www.meuamigocao.org/
+BR|São Paulo|https://www.desabandone.com.br/
