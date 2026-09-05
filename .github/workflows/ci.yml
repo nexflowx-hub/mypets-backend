@@ -43,13 +43,34 @@ jobs:
           node-version: 22
       - run: npm install
       - run: sudo apt-get update && sudo apt-get install -y postgresql-client
-      - name: Create Supabase Auth schema stub
+      - name: Create Supabase Auth and Storage schema stubs
         run: |
           psql "$DIRECT_URL" -v ON_ERROR_STOP=1 <<'SQL'
           create schema if not exists auth;
           create table if not exists auth.users (id uuid primary key);
           create role anon nologin;
           create role authenticated nologin;
+          create or replace function auth.jwt() returns jsonb language sql stable as $$ select '{}'::jsonb $$;
+
+          create schema if not exists storage;
+          create table storage.buckets (
+            id text primary key,
+            name text not null,
+            public boolean not null default false,
+            file_size_limit bigint,
+            allowed_mime_types text[]
+          );
+          create table storage.objects (
+            id uuid primary key default gen_random_uuid(),
+            bucket_id text not null,
+            name text not null,
+            owner_id text
+          );
+          alter table storage.objects enable row level security;
+          create or replace function storage.foldername(name text) returns text[]
+          language sql immutable as $$ select string_to_array(trim(both '/' from name), '/')[1:greatest(array_length(string_to_array(trim(both '/' from name), '/'), 1)-1,0)] $$;
+          create or replace function storage.extension(name text) returns text
+          language sql immutable as $$ select case when position('.' in reverse(name)) > 0 then reverse(split_part(reverse(name), '.', 1)) else '' end $$;
           SQL
       - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260904193000_init.sql
       - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260905033000_core_platform.sql
@@ -57,6 +78,7 @@ jobs:
       - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260905054000_growth_funnels.sql
       - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260905060000_causes_sponsorships.sql
       - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260905150000_admin_claim_center.sql
+      - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260905193000_pet_media_storage.sql
       - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/seed.sql
       - run: npm run typecheck
       - run: npm run build
