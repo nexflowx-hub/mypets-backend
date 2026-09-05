@@ -7,6 +7,7 @@ import rateLimit from "@fastify/rate-limit";
 import { PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { registerCoreRoutes } from "./core-routes.js";
+import { registerIdentityRoutes } from "./identity-routes.js";
 
 const prisma = new PrismaClient();
 const app = Fastify({ logger: true, trustProxy: true });
@@ -35,10 +36,12 @@ function tags(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
 }
 
+const publicDemoContent = process.env.PUBLIC_DEMO_CONTENT === "true";
+
 app.get("/", async () => ({
   service: "mypets-api",
   status: "ok",
-  version: process.env.APP_VERSION ?? "0.2.0",
+  version: process.env.APP_VERSION ?? "0.3.0",
 }));
 
 app.get("/health", async (_req, reply) => {
@@ -63,7 +66,7 @@ app.get("/v1/health", async (_req, reply) => {
 
 app.get("/v1/stories", async () => {
   const rows = await prisma.story.findMany({
-    where: { active: true },
+    where: { active: true, ...(publicDemoContent ? {} : { isDemo: false }) },
     orderBy: { sortOrder: "asc" },
     take: 50,
   });
@@ -94,9 +97,11 @@ app.get("/v1/stories", async () => {
 });
 
 app.get("/v1/impact/public", async () => {
-  const showDemo = process.env.SHOW_DEMO_IMPACT !== "false";
-  const rows = await prisma.impactMetric.findMany({ orderBy: { sortOrder: "asc" } });
-  return { data: showDemo ? rows : rows.filter((metric) => !metric.isDemo) };
+  const rows = await prisma.impactMetric.findMany({
+    where: publicDemoContent ? {} : { isDemo: false },
+    orderBy: { sortOrder: "asc" },
+  });
+  return { data: rows };
 });
 
 app.get("/v1/config", async () => ({
@@ -228,6 +233,7 @@ app.post("/v1/reports", async (req, reply) => {
 });
 
 await registerCoreRoutes(app, prisma);
+await registerIdentityRoutes(app, prisma);
 
 app.setErrorHandler((error, _req, reply) => {
   app.log.error(error);
