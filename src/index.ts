@@ -71,13 +71,29 @@ app.get("/v1/health", async (_req, reply) => {
 });
 
 app.get("/v1/stories", async () => {
-  const rows = await prisma.story.findMany({
+  let rows = await prisma.story.findMany({
     where: { active: true, ...(publicDemoContent ? {} : { isDemo: false }) },
     orderBy: { sortOrder: "asc" },
     take: 50,
   });
 
+  let source: "live" | "mixed" | "demo_fallback" = publicDemoContent ? "mixed" : "live";
+
+  if (!publicDemoContent && rows.length === 0) {
+    rows = await prisma.story.findMany({
+      where: { active: true, isDemo: true },
+      orderBy: { sortOrder: "asc" },
+      take: 12,
+    });
+    source = "demo_fallback";
+  }
+
   return {
+    meta: {
+      source,
+      demoFallback: source === "demo_fallback",
+      count: rows.length,
+    },
     data: rows.map((story) => ({
       id: story.id,
       slug: story.slug,
@@ -122,6 +138,7 @@ app.get("/v1/config", async () => ({
     claimCenterEnabled: true,
     adminEnabled: Boolean((process.env.ADMIN_EMAILS ?? "").trim()),
     mediaStorageEnabled: Boolean(process.env.SUPABASE_URL),
+    storyFallbackEnabled: true,
   },
 }));
 
