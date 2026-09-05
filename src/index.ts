@@ -11,6 +11,7 @@ import { registerIdentityRoutes } from "./identity-routes.js";
 import { registerGrowthRoutes } from "./growth-routes.js";
 import { registerGrowthConversionRoutes } from "./growth-conversion-routes.js";
 import { registerCauseRoutes } from "./cause-routes.js";
+import { registerSocialRoutes } from "./social-routes.js";
 
 const prisma = new PrismaClient();
 const app = Fastify({ logger: true, trustProxy: true });
@@ -27,7 +28,7 @@ await app.register(cors, {
     cb(new Error("Origin not allowed"), false);
   },
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "Idempotency-Key"],
+  allowedHeaders: ["Content-Type", "Authorization", "Idempotency-Key", "X-Discovery-Token"],
 });
 await app.register(rateLimit, { max: 120, timeWindow: "1 minute" });
 
@@ -44,7 +45,7 @@ const publicDemoContent = process.env.PUBLIC_DEMO_CONTENT === "true";
 app.get("/", async () => ({
   service: "mypets-api",
   status: "ok",
-  version: process.env.APP_VERSION ?? "0.5.0",
+  version: process.env.APP_VERSION ?? "0.6.0",
 }));
 
 app.get("/health", async (_req, reply) => {
@@ -114,6 +115,8 @@ app.get("/v1/config", async () => ({
     authEnabled: Boolean(process.env.SUPABASE_URL && (process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY)),
     growthEnabled: true,
     causesEnabled: true,
+    socialProfilesEnabled: true,
+    discoveryEnabled: Boolean(process.env.DISCOVERY_INGEST_TOKEN),
   },
 }));
 
@@ -223,6 +226,7 @@ await registerIdentityRoutes(app, prisma);
 await registerGrowthRoutes(app, prisma);
 await registerGrowthConversionRoutes(app, prisma);
 await registerCauseRoutes(app, prisma);
+await registerSocialRoutes(app, prisma);
 
 app.setErrorHandler((error, _req, reply) => {
   app.log.error(error);
