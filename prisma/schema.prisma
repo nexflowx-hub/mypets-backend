@@ -108,18 +108,50 @@ model ContentBlock {
 }
 
 model Profile {
-  id          String         @id @db.Uuid
-  displayName String?        @map("display_name")
-  locale      String         @default("pt-PT")
-  country     String?
-  avatarUrl   String?        @map("avatar_url")
-  createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt   DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
-  protector   Protector?
-  petUpdates  PetUpdate[]
-  offers      SupportOffer[]
+  id               String            @id @db.Uuid
+  displayName      String?           @map("display_name")
+  locale           String            @default("pt-PT")
+  country          String?
+  avatarUrl        String?           @map("avatar_url")
+  createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+  protector        Protector?
+  petUpdates       PetUpdate[]
+  offers           SupportOffer[]
+  roles            ProfileRole[]
+  volunteerProfile VolunteerProfile?
 
   @@map("profiles")
+}
+
+model ProfileRole {
+  userId    String   @map("user_id") @db.Uuid
+  profile   Profile  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@id([userId, role])
+  @@index([role, createdAt], map: "profile_roles_role_idx")
+  @@map("profile_roles")
+}
+
+model VolunteerProfile {
+  userId        String   @id @map("user_id") @db.Uuid
+  profile       Profile  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  country       String?
+  city          String?
+  region        String?
+  availability  String?
+  participation Json     @default("[]")
+  skills        Json     @default("[]")
+  radiusKm      Int?     @map("radius_km")
+  notes         String?
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([country, city, isActive], map: "volunteer_profiles_location_idx")
+  @@map("volunteer_profiles")
 }
 
 model Protector {
