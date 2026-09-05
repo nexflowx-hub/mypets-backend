@@ -33,6 +33,8 @@ jobs:
       PAYMENT_PROVIDER: mock
       PAYMENTS_LIVE: "false"
       PAYOUTS_ENABLED: "false"
+      SUPABASE_URL: https://example.supabase.co
+      SUPABASE_PUBLISHABLE_KEY: test_publishable_key
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -40,7 +42,16 @@ jobs:
           node-version: 22
       - run: npm install
       - run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Create Supabase Auth schema stub
+        run: |
+          psql "$DIRECT_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          create schema if not exists auth;
+          create table if not exists auth.users (id uuid primary key);
+          create role anon nologin;
+          create role authenticated nologin;
+          SQL
       - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260904193000_init.sql
+      - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260905033000_core_platform.sql
       - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/seed.sql
       - run: npm run typecheck
       - run: npm run build
