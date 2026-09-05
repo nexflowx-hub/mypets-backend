@@ -9,6 +9,7 @@ import { z } from "zod";
 import { registerCoreRoutes } from "./core-routes.js";
 import { registerIdentityRoutes } from "./identity-routes.js";
 import { registerGrowthRoutes } from "./growth-routes.js";
+import { registerGrowthConversionRoutes } from "./growth-conversion-routes.js";
 
 const prisma = new PrismaClient();
 const app = Fastify({ logger: true, trustProxy: true });
@@ -218,6 +219,7 @@ app.post("/v1/reports", async (req, reply) => {
 await registerCoreRoutes(app, prisma);
 await registerIdentityRoutes(app, prisma);
 await registerGrowthRoutes(app, prisma);
+await registerGrowthConversionRoutes(app, prisma);
 
 app.setErrorHandler((error, _req, reply) => {
   app.log.error(error);
