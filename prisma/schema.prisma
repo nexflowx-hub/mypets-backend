@@ -106,3 +106,167 @@ model ContentBlock {
 
   @@map("content_blocks")
 }
+
+model Profile {
+  id          String         @id @db.Uuid
+  displayName String?        @map("display_name")
+  locale      String         @default("pt-PT")
+  country     String?
+  avatarUrl   String?        @map("avatar_url")
+  createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+  protector   Protector?
+  petUpdates  PetUpdate[]
+  offers      SupportOffer[]
+
+  @@map("profiles")
+}
+
+model Protector {
+  id             String                  @id @default(uuid()) @db.Uuid
+  userId         String                  @unique @map("user_id") @db.Uuid
+  profile        Profile                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  slug           String                  @unique
+  displayName    String                  @map("display_name")
+  country        String
+  city           String
+  region         String?
+  bio            String?
+  yearsActive    Int                     @default(0) @map("years_active")
+  animalsCurrent Int                     @default(0) @map("animals_current")
+  activityTypes  Json                    @default("[]") @map("activity_types")
+  socialLinks    Json                    @default("{}") @map("social_links")
+  verification   String                  @default("NEW")
+  status         String                  @default("ACTIVE")
+  isPublic       Boolean                 @default(true) @map("is_public")
+  createdAt      DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime                @updatedAt @map("updated_at") @db.Timestamptz(6)
+  verifications  ProtectorVerification[]
+  pets           Pet[]
+  needs          Need[]
+
+  @@index([country, city], map: "protectors_country_city_idx")
+  @@index([status, isPublic], map: "protectors_status_idx")
+  @@map("protectors")
+}
+
+model ProtectorVerification {
+  id           String    @id @default(uuid()) @db.Uuid
+  protectorId  String    @map("protector_id") @db.Uuid
+  protector    Protector @relation(fields: [protectorId], references: [id], onDelete: Cascade)
+  level        String
+  status       String    @default("PENDING")
+  notesPrivate String?   @map("notes_private")
+  evidence     Json      @default("{}")
+  reviewedAt   DateTime? @map("reviewed_at") @db.Timestamptz(6)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([protectorId, level])
+  @@index([status], map: "protector_verifications_status_idx")
+  @@map("protector_verifications")
+}
+
+model Pet {
+  id           String      @id @default(uuid()) @db.Uuid
+  facepetsId   String      @unique @map("facepets_id")
+  protectorId  String      @map("protector_id") @db.Uuid
+  protector    Protector   @relation(fields: [protectorId], references: [id], onDelete: Cascade)
+  slug         String      @unique
+  name         String
+  species      String
+  sex          String      @default("UNKNOWN")
+  country      String
+  city         String?
+  rescueDate   DateTime?   @map("rescue_date") @db.Date
+  status       String      @default("RESCUED")
+  story        String?
+  primaryImage String?     @map("primary_image")
+  isPublic     Boolean     @default(true) @map("is_public")
+  createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+  media        PetMedia[]
+  updates      PetUpdate[]
+  needs        Need[]
+
+  @@index([protectorId], map: "pets_protector_idx")
+  @@index([status, isPublic], map: "pets_status_idx")
+  @@index([country], map: "pets_country_idx")
+  @@map("pets")
+}
+
+model PetMedia {
+  id            String   @id @default(uuid()) @db.Uuid
+  petId         String   @map("pet_id") @db.Uuid
+  pet           Pet      @relation(fields: [petId], references: [id], onDelete: Cascade)
+  mediaType     String   @default("IMAGE") @map("media_type")
+  storageBucket String?  @map("storage_bucket")
+  storagePath   String?  @map("storage_path")
+  externalUrl   String?  @map("external_url")
+  provenance    String   @default("REAL_CASE")
+  caption       String?
+  sortOrder     Int      @default(0) @map("sort_order")
+  isPublic      Boolean  @default(true) @map("is_public")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([petId, sortOrder], map: "pet_media_pet_idx")
+  @@map("pet_media")
+}
+
+model PetUpdate {
+  id           String   @id @default(uuid()) @db.Uuid
+  petId        String   @map("pet_id") @db.Uuid
+  pet          Pet      @relation(fields: [petId], references: [id], onDelete: Cascade)
+  authorUserId String   @map("author_user_id") @db.Uuid
+  author       Profile  @relation(fields: [authorUserId], references: [id], onDelete: Cascade)
+  title        String?
+  body         String
+  statusAfter  String?  @map("status_after")
+  isPublic     Boolean  @default(true) @map("is_public")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([petId, createdAt], map: "pet_updates_pet_idx")
+  @@map("pet_updates")
+}
+
+model Need {
+  id                  String         @id @default(uuid()) @db.Uuid
+  protectorId         String         @map("protector_id") @db.Uuid
+  protector           Protector      @relation(fields: [protectorId], references: [id], onDelete: Cascade)
+  petId               String?        @map("pet_id") @db.Uuid
+  pet                 Pet?           @relation(fields: [petId], references: [id], onDelete: SetNull)
+  type                 String
+  title                String
+  description          String?
+  supportMode          String         @default("BOTH") @map("support_mode")
+  targetAmountCents    Int?           @map("target_amount_cents")
+  raisedAmountCents    Int            @default(0) @map("raised_amount_cents")
+  currency             String?
+  status               String         @default("OPEN")
+  isPublic             Boolean        @default(true) @map("is_public")
+  createdAt            DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+  offers               SupportOffer[]
+
+  @@index([protectorId, status], map: "needs_protector_idx")
+  @@index([petId], map: "needs_pet_idx")
+  @@index([status, type, isPublic], map: "needs_status_type_idx")
+  @@map("needs")
+}
+
+model SupportOffer {
+  id        String   @id @default(uuid()) @db.Uuid
+  needId    String   @map("need_id") @db.Uuid
+  need      Need     @relation(fields: [needId], references: [id], onDelete: Cascade)
+  userId    String   @map("user_id") @db.Uuid
+  user      Profile  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind      String
+  message   String?
+  status    String   @default("OFFERED")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([needId, status], map: "support_offers_need_idx")
+  @@index([userId, createdAt], map: "support_offers_user_idx")
+  @@map("support_offers")
+}
