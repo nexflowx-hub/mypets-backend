@@ -40,11 +40,22 @@ docker run --rm \
   sh -ec "psql \"\$DIRECT_URL\" -v ON_ERROR_STOP=1 -f /sql/migrations/$MIGRATION"
 
 log "Verifying pet-media bucket"
-docker run --rm \
+BUCKET_ROW="$(docker run --rm -i \
   -e DIRECT_URL="$DB_URL" \
   postgres:16-alpine \
-  sh -ec 'psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -Atc "select id || chr(124) || public || chr(124) || coalesce(file_size_limit::text,\047\047) from storage.buckets where id=\047pet-media\047"'
-unset DB_URL
+  sh -ec 'psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -At' <<'SQL'
+select id || '|' || public::text || '|' || coalesce(file_size_limit::text, '')
+from storage.buckets
+where id = 'pet-media';
+SQL
+)"
+[ -n "$BUCKET_ROW" ] || fail "pet-media bucket was not found after migration"
+echo "$BUCKET_ROW"
+case "$BUCKET_ROW" in
+  pet-media\|true\|10485760) ;;
+  *) fail "Unexpected pet-media bucket configuration: $BUCKET_ROW" ;;
+esac
+unset DB_URL BUCKET_ROW
 
 set_env "APP_VERSION" "0.8.0"
 
