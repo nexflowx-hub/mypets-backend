@@ -26,4 +26,45 @@ export async function registerGrowthConversionRoutes(app: FastifyInstance, prism
 
     return { data: lead };
   });
+
+  app.get("/v1/me/referrals", async (req, reply) => {
+    const user = await requireAuth(req, reply);
+    if (!user) return;
+
+    const totals = await prisma.$queryRaw<Array<{ links: bigint; clicks: bigint }>>`
+      select count(*)::bigint as links, coalesce(sum(clicks), 0)::bigint as clicks
+      from public.share_links
+      where owner_user_id = ${user.id}::uuid and active = true
+    `;
+    const top = await prisma.$queryRaw<Array<{
+      code: string;
+      destination_path: string;
+      medium: string | null;
+      campaign: string | null;
+      clicks: number;
+      created_at: Date;
+    }>>`
+      select code, destination_path, medium, campaign, clicks, created_at
+      from public.share_links
+      where owner_user_id = ${user.id}::uuid and active = true
+      order by clicks desc, created_at desc
+      limit 12
+    `;
+
+    return {
+      data: {
+        activeLinks: Number(totals[0]?.links ?? 0n),
+        clicks: Number(totals[0]?.clicks ?? 0n),
+        topLinks: top.map((row) => ({
+          code: row.code,
+          path: `/s/${row.code}`,
+          destinationPath: row.destination_path,
+          channel: row.medium,
+          campaign: row.campaign,
+          clicks: row.clicks,
+          createdAt: row.created_at,
+        })),
+      },
+    };
+  });
 }
