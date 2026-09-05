@@ -6,6 +6,7 @@ import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import { PrismaClient } from "@prisma/client";
 import { z } from "zod";
+import { registerCoreRoutes } from "./core-routes.js";
 
 const prisma = new PrismaClient();
 const app = Fastify({ logger: true, trustProxy: true });
@@ -21,7 +22,8 @@ await app.register(cors, {
     if (!origin || origins.includes(origin)) return cb(null, true);
     cb(new Error("Origin not allowed"), false);
   },
-  methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "Idempotency-Key"],
 });
 await app.register(rateLimit, { max: 120, timeWindow: "1 minute" });
 
@@ -36,7 +38,7 @@ function tags(value: unknown): string[] {
 app.get("/", async () => ({
   service: "mypets-api",
   status: "ok",
-  version: process.env.APP_VERSION ?? "0.1.0",
+  version: process.env.APP_VERSION ?? "0.2.0",
 }));
 
 app.get("/health", async (_req, reply) => {
@@ -103,6 +105,7 @@ app.get("/v1/config", async () => ({
     environment: process.env.APP_ENV ?? "production",
     paymentsLive: process.env.PAYMENTS_LIVE === "true",
     payoutsEnabled: process.env.PAYOUTS_ENABLED === "true",
+    authEnabled: Boolean(process.env.SUPABASE_URL && (process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY)),
   },
 }));
 
@@ -223,6 +226,8 @@ app.post("/v1/reports", async (req, reply) => {
 
   return reply.code(201).send({ data: { id: row.id, status: row.status } });
 });
+
+await registerCoreRoutes(app, prisma);
 
 app.setErrorHandler((error, _req, reply) => {
   app.log.error(error);
