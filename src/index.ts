@@ -13,6 +13,7 @@ import { registerGrowthConversionRoutes } from "./growth-conversion-routes.js";
 import { registerCauseRoutes } from "./cause-routes.js";
 import { registerSocialRoutes } from "./social-routes.js";
 import { registerAdminRoutes } from "./admin-routes.js";
+import { registerMediaRoutes } from "./media-routes.js";
 
 const prisma = new PrismaClient();
 const app = Fastify({ logger: true, trustProxy: true });
@@ -46,7 +47,7 @@ const publicDemoContent = process.env.PUBLIC_DEMO_CONTENT === "true";
 app.get("/", async () => ({
   service: "mypets-api",
   status: "ok",
-  version: process.env.APP_VERSION ?? "0.7.0",
+  version: process.env.APP_VERSION ?? "0.8.0",
 }));
 
 app.get("/health", async (_req, reply) => {
@@ -120,6 +121,7 @@ app.get("/v1/config", async () => ({
     discoveryEnabled: Boolean(process.env.DISCOVERY_INGEST_TOKEN),
     claimCenterEnabled: true,
     adminEnabled: Boolean((process.env.ADMIN_EMAILS ?? "").trim()),
+    mediaStorageEnabled: Boolean(process.env.SUPABASE_URL),
   },
 }));
 
@@ -231,6 +233,7 @@ await registerGrowthConversionRoutes(app, prisma);
 await registerCauseRoutes(app, prisma);
 await registerSocialRoutes(app, prisma);
 await registerAdminRoutes(app, prisma);
+await registerMediaRoutes(app, prisma);
 
 app.setErrorHandler((error, _req, reply) => {
   app.log.error(error);
