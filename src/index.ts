@@ -88,9 +88,7 @@ app.get("/v1/stories", async () => {
       tags: tags(story.tags),
       targetCents: story.targetCents,
       raisedCents: story.raisedCents,
-      progress: story.targetCents > 0
-        ? Math.min(100, Math.round((story.raisedCents / story.targetCents) * 100))
-        : 0,
+      progress: story.targetCents > 0 ? Math.min(100, Math.round((story.raisedCents / story.targetCents) * 100)) : 0,
       isDemo: story.isDemo,
     })),
   };
@@ -144,20 +142,20 @@ const contributionSchema = z.object({
 });
 
 app.post("/v1/contributions/intents", async (req, reply) => {
+  if (process.env.PAYMENTS_LIVE !== "true") {
+    return reply.code(409).send({ error: { code: "PAYMENTS_NOT_LIVE", message: "Online contributions are not active yet" } });
+  }
+
   const parsed = contributionSchema.safeParse(req.body);
   if (!parsed.success) return reply.code(400).send({ error: { code: "INVALID_INPUT", message: "Invalid contribution request" } });
 
-  const story = parsed.data.storyId
-    ? await prisma.story.findUnique({ where: { id: parsed.data.storyId } })
-    : null;
-
+  const story = parsed.data.storyId ? await prisma.story.findUnique({ where: { id: parsed.data.storyId } }) : null;
   if (parsed.data.storyId && !story) {
     return reply.code(404).send({ error: { code: "STORY_NOT_FOUND", message: "Story not found" } });
   }
 
   const idempotencyKey = String(req.headers["idempotency-key"] ?? crypto.randomUUID());
   const targetLabel = story?.name ?? (parsed.data.targetType === "GUARDIANS" ? "MyPets Guardians" : "MyPets");
-
   const row = await prisma.contribution.upsert({
     where: { idempotencyKey },
     update: {},
@@ -173,7 +171,7 @@ app.post("/v1/contributions/intents", async (req, reply) => {
       provider: process.env.PAYMENT_PROVIDER ?? "mock",
       status: "PENDING",
       idempotencyKey,
-      isDemo: process.env.PAYMENTS_LIVE !== "true",
+      isDemo: false,
     },
   });
 
@@ -181,34 +179,17 @@ app.post("/v1/contributions/intents", async (req, reply) => {
 });
 
 app.post("/v1/contributions/:id/confirm", async (req, reply) => {
-  const params = z.object({ id: z.string().uuid() }).safeParse(req.params);
-  if (!params.success) return reply.code(400).send({ error: { code: "INVALID_ID", message: "Invalid contribution id" } });
-
-  if ((process.env.PAYMENT_PROVIDER ?? "mock") !== "mock" || process.env.PAYMENTS_LIVE === "true") {
-    return reply.code(409).send({ error: { code: "MOCK_CONFIRM_DISABLED", message: "Mock confirmation is disabled" } });
+  if (process.env.PAYMENTS_LIVE !== "true") {
+    return reply.code(409).send({ error: { code: "PAYMENTS_NOT_LIVE", message: "Online contributions are not active yet" } });
   }
 
-  const existing = await prisma.contribution.findUnique({ where: { id: params.data.id } });
-  if (!existing) return reply.code(404).send({ error: { code: "NOT_FOUND", message: "Contribution not found" } });
-  if (existing.status === "PAID") return { data: existing };
+  const params = z.object({ id: z.string().uuid() }).safeParse(req.params);
+  if (!params.success) return reply.code(400).send({ error: { code: "INVALID_ID", message: "Invalid contribution id" } });
+  if ((process.env.PAYMENT_PROVIDER ?? "mock") === "mock") {
+    return reply.code(409).send({ error: { code: "LIVE_PROVIDER_REQUIRED", message: "A live payment provider is required" } });
+  }
 
-  const paid = await prisma.$transaction(async (tx) => {
-    const updated = await tx.contribution.update({
-      where: { id: existing.id },
-      data: { status: "PAID", providerRef: `mock_${crypto.randomUUID()}` },
-    });
-
-    if (updated.storyId) {
-      await tx.story.update({
-        where: { id: updated.storyId },
-        data: { raisedCents: { increment: updated.amountCents } },
-      });
-    }
-
-    return updated;
-  });
-
-  return { data: paid };
+  return reply.code(409).send({ error: { code: "WEBHOOK_CONFIRM_REQUIRED", message: "Payment confirmation is handled by the provider webhook" } });
 });
 
 const reportSchema = z.object({
@@ -237,12 +218,9 @@ await registerIdentityRoutes(app, prisma);
 
 app.setErrorHandler((error, _req, reply) => {
   app.log.error(error);
-  if (!reply.sent) {
-    reply.code(500).send({ error: { code: "INTERNAL_ERROR", message: "Unexpected server error" } });
-  }
+  if (!reply.sent) reply.code(500).send({ error: { code: "INTERNAL_ERROR", message: "Unexpected server error" } });
 });
 
 const port = Number(process.env.PORT ?? 8081);
 const host = process.env.HOST ?? "0.0.0.0";
-
 await app.listen({ port, host });
