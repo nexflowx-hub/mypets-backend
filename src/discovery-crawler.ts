@@ -131,7 +131,10 @@ function meta(html: string, key: string, property = false) {
 }
 
 function titleOf(html: string) {
-  return meta(html, "og:title", true) ?? decodeHtml(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.replace(/\s+/g, " ").trim() ?? "") || null;
+  const ogTitle = meta(html, "og:title", true);
+  if (ogTitle) return ogTitle;
+  const documentTitle = decodeHtml(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.replace(/\s+/g, " ").trim() ?? "");
+  return documentTitle || null;
 }
 
 function absoluteHref(raw: string, base: URL) {
