@@ -53,6 +53,7 @@ jobs:
       - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260904193000_init.sql
       - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260905033000_core_platform.sql
       - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260905050500_identity_roles.sql
+      - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260905054000_growth_funnels.sql
       - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/seed.sql
       - run: npm run typecheck
       - run: npm run build
