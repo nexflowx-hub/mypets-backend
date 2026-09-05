@@ -9,6 +9,12 @@ create table if not exists public.profile_roles (
 );
 create index if not exists profile_roles_role_idx on public.profile_roles(role, created_at desc);
 
+-- Existing protector accounts are already participating as protectors.
+insert into public.profile_roles (user_id, role)
+select user_id, 'PROTECTOR'
+from public.protectors
+on conflict (user_id, role) do nothing;
+
 create table if not exists public.volunteer_profiles (
   user_id         uuid primary key references public.profiles(id) on delete cascade,
   country         text check (country in ('PT','BR')),
