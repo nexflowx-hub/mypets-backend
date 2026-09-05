@@ -29,7 +29,7 @@ jobs:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/mypets_ci
       DIRECT_URL: postgresql://postgres:postgres@localhost:5432/mypets_ci
       CORS_ORIGINS: http://localhost:3000
-      SHOW_DEMO_IMPACT: "true"
+      PUBLIC_DEMO_CONTENT: "false"
       PAYMENT_PROVIDER: mock
       PAYMENTS_LIVE: "false"
       PAYOUTS_ENABLED: "false"
@@ -52,6 +52,7 @@ jobs:
           SQL
       - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260904193000_init.sql
       - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260905033000_core_platform.sql
+      - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260905050500_identity_roles.sql
       - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/seed.sql
       - run: npm run typecheck
       - run: npm run build
