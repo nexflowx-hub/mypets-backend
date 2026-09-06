@@ -20,7 +20,7 @@ set_env() {
 }
 
 configure_currency() {
-  local currency="$1" answer store_code api_key
+  local currency="$1" answer store_code api_key webhook_secret
   read -r -p "Configure MyPets ${currency} Store now? [y/N]: " answer
   [[ "$answer" =~ ^[Yy]$ ]] || return 0
 
@@ -32,9 +32,15 @@ configure_currency() {
   [ -n "$api_key" ] || fail "API key cannot be empty"
   [[ "$api_key" == xp_test_* || "$api_key" == xp_live_* ]] || fail "Unexpected XPAYMENTS key prefix"
 
+  read -r -s -p "XPAYMENTS webhook secret (${currency}) [hidden]: " webhook_secret
+  echo
+  [ -n "$webhook_secret" ] || fail "Webhook secret cannot be empty"
+  [[ "$webhook_secret" == whsec_* ]] || fail "Unexpected XPAYMENTS webhook secret prefix"
+
   set_env "XPAYMENTS_STORE_CODE_${currency}" "$store_code"
   set_env "XPAYMENTS_API_KEY_${currency}" "$api_key"
-  unset api_key
+  set_env "XPAYMENTS_WEBHOOK_SECRET_${currency}" "$webhook_secret"
+  unset api_key webhook_secret
 }
 
 set_env "PAYMENT_PROVIDER" "xpayments"
@@ -46,8 +52,16 @@ configure_currency BRL
 
 read -r -p "Enable public MyPets payments now? [y/N]: " enable
 if [[ "$enable" =~ ^[Yy]$ ]]; then
-  has_key="$(grep -Ec '^XPAYMENTS_API_KEY_(EUR|BRL)=xp_(test|live)_' "$ENV_FILE" || true)"
-  [ "$has_key" -gt 0 ] || fail "No XPAYMENTS API key is configured"
+  configured=0
+  for currency in EUR BRL; do
+    api_key="$(sed -n "s/^XPAYMENTS_API_KEY_${currency}=//p" "$ENV_FILE" | tail -1)"
+    webhook_secret="$(sed -n "s/^XPAYMENTS_WEBHOOK_SECRET_${currency}=//p" "$ENV_FILE" | tail -1)"
+    if [[ "$api_key" == xp_test_* || "$api_key" == xp_live_* ]]; then
+      [[ "$webhook_secret" == whsec_* ]] || fail "${currency} has an API key but no valid webhook secret"
+      configured=$((configured + 1))
+    fi
+  done
+  [ "$configured" -gt 0 ] || fail "No complete XPAYMENTS Store configuration is present"
   set_env "PAYMENTS_LIVE" "true"
 else
   set_env "PAYMENTS_LIVE" "false"
@@ -67,7 +81,7 @@ done
 
 [ "$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$API_CONTAINER")" = "healthy" ] || fail "MyPets API did not become healthy"
 
-# This endpoint deliberately exposes only capability flags/currencies, never API keys.
+# This endpoint deliberately exposes only capability flags/currencies, never API keys or webhook secrets.
 curl -fsS https://api.mypets.lat/v1/config
 echo
 
