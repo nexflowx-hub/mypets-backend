@@ -15,6 +15,7 @@ import { registerSocialRoutes } from "./social-routes.js";
 import { registerAdminRoutes } from "./admin-routes.js";
 import { registerMediaRoutes } from "./media-routes.js";
 import { registerPaymentRoutes } from "./payment-routes.js";
+import { registerPaymentWebhookRoutes } from "./payment-webhook-routes.js";
 
 const prisma = new PrismaClient();
 const app = Fastify({ logger: true, trustProxy: true });
@@ -31,7 +32,7 @@ await app.register(cors, {
     cb(new Error("Origin not allowed"), false);
   },
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "Idempotency-Key", "X-Discovery-Token"],
+  allowedHeaders: ["Content-Type", "Authorization", "Idempotency-Key", "X-Discovery-Token", "X-Nexflowx-Signature"],
 });
 await app.register(rateLimit, { max: 120, timeWindow: "1 minute" });
 
@@ -131,6 +132,10 @@ app.get("/v1/config", async () => {
     ...(process.env.XPAYMENTS_API_KEY_EUR ? ["EUR"] : []),
     ...(process.env.XPAYMENTS_API_KEY_BRL ? ["BRL"] : []),
   ];
+  const webhookCurrencies = [
+    ...(process.env.XPAYMENTS_WEBHOOK_SECRET_EUR ? ["EUR"] : []),
+    ...(process.env.XPAYMENTS_WEBHOOK_SECRET_BRL ? ["BRL"] : []),
+  ];
   const paymentsLive = process.env.PAYMENTS_LIVE === "true" && paymentProvider === "xpayments" && paymentCurrencies.length > 0;
 
   return {
@@ -140,7 +145,9 @@ app.get("/v1/config", async () => {
       paymentsLive,
       paymentProvider: paymentsLive ? "xpayments" : null,
       paymentCurrencies,
+      paymentWebhookCurrencies: webhookCurrencies,
       embeddedCheckout: paymentsLive,
+      legacyStoryPaymentsLive: false,
       payoutsEnabled: process.env.PAYOUTS_ENABLED === "true",
       authEnabled: Boolean(process.env.SUPABASE_URL && (process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY)),
       growthEnabled: true,
@@ -265,6 +272,7 @@ await registerSocialRoutes(app, prisma);
 await registerAdminRoutes(app, prisma);
 await registerMediaRoutes(app, prisma);
 await registerPaymentRoutes(app, prisma);
+await registerPaymentWebhookRoutes(app, prisma);
 
 app.setErrorHandler((error, _req, reply) => {
   app.log.error(error);
