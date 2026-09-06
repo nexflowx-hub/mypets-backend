@@ -44,9 +44,11 @@ docker run --rm \
   sh -ec "psql \"\$DIRECT_URL\" -v ON_ERROR_STOP=1 -f /sql/migrations/$MIGRATION"
 
 log "Verifying payment tables"
-docker run --rm -e DIRECT_URL="$DB_URL" postgres:16-alpine \
-  sh -ec 'psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -Atc "select to_regclass(\047public.payment_intents\047), to_regclass(\047public.payment_provider_events\047)"'
-unset DB_URL
+VERIFY_OUTPUT="$(docker run --rm -e DIRECT_URL="$DB_URL" postgres:16-alpine \
+  sh -ec 'psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -Atc "select to_regclass(\$\$public.payment_intents\$\$), to_regclass(\$\$public.payment_provider_events\$\$)"')"
+[ "$VERIFY_OUTPUT" = "payment_intents|payment_provider_events" ] || fail "Payment table verification failed: $VERIFY_OUTPUT"
+printf '%s\n' "$VERIFY_OUTPUT"
+unset DB_URL VERIFY_OUTPUT
 
 # Prepare the provider, but deliberately keep public charging disabled until a dedicated MyPets Store/API key + webhook are configured.
 set_env "PAYMENT_PROVIDER" "xpayments"
