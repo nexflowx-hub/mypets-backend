@@ -48,15 +48,17 @@ docker run --rm -e DIRECT_URL="$DB_URL" postgres:16-alpine \
   sh -ec 'psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -Atc "select to_regclass(\047public.payment_intents\047), to_regclass(\047public.payment_provider_events\047)"'
 unset DB_URL
 
-# Prepare the provider, but deliberately keep public charging disabled until a dedicated MyPets Store/API key is configured.
+# Prepare the provider, but deliberately keep public charging disabled until a dedicated MyPets Store/API key + webhook are configured.
 set_env "PAYMENT_PROVIDER" "xpayments"
 set_env_default "PAYMENTS_LIVE" "false"
 set_env_default "XPAYMENTS_API_BASE" "https://api.xpayments.digital/api/v1"
 set_env_default "XPAYMENTS_CHECKOUT_BASE" "https://checkout.xpayments.digital"
 set_env_default "XPAYMENTS_STORE_CODE_EUR" ""
 set_env_default "XPAYMENTS_API_KEY_EUR" ""
+set_env_default "XPAYMENTS_WEBHOOK_SECRET_EUR" ""
 set_env_default "XPAYMENTS_STORE_CODE_BRL" ""
 set_env_default "XPAYMENTS_API_KEY_BRL" ""
+set_env_default "XPAYMENTS_WEBHOOK_SECRET_BRL" ""
 set_env "APP_VERSION" "0.9.0"
 chmod 600 "$ENV_FILE"
 
@@ -76,16 +78,16 @@ done
 
 [ "$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$API_CONTAINER")" = "healthy" ] || fail "MyPets API did not become healthy"
 
-log "Public configuration (keys are never printed)"
+log "Public configuration (keys and webhook secrets are never printed)"
 curl -fsS https://api.mypets.lat/v1/config
 echo
 
 echo
 echo "============================================================"
 echo "MyPets XPAYMENTS v6 backend deployed."
-echo "Schema + provider adapter + embedded-checkout API are ready."
+echo "Schema + provider adapter + signed webhook + embedded checkout API are ready."
 echo "PAYMENTS_LIVE was NOT enabled automatically."
-echo "Add dedicated MyPets XPAYMENTS Store/API key(s) server-side,"
-echo "test them, then explicitly enable PAYMENTS_LIVE=true."
+echo "Create dedicated MyPets XPAYMENTS Store/API key + webhook first,"
+echo "then run deploy/configure-xpayments-v6.sh."
 echo "No Caddy, AtlasWallet or database connection settings changed."
 echo "============================================================"
