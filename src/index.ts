@@ -14,6 +14,7 @@ import { registerCauseRoutes } from "./cause-routes.js";
 import { registerSocialRoutes } from "./social-routes.js";
 import { registerAdminRoutes } from "./admin-routes.js";
 import { registerMediaRoutes } from "./media-routes.js";
+import { registerPaymentRoutes } from "./payment-routes.js";
 
 const prisma = new PrismaClient();
 const app = Fastify({ logger: true, trustProxy: true });
@@ -47,7 +48,7 @@ const publicDemoContent = process.env.PUBLIC_DEMO_CONTENT === "true";
 app.get("/", async () => ({
   service: "mypets-api",
   status: "ok",
-  version: process.env.APP_VERSION ?? "0.8.0",
+  version: process.env.APP_VERSION ?? "0.9.0",
 }));
 
 app.get("/health", async (_req, reply) => {
@@ -124,23 +125,35 @@ app.get("/v1/impact/public", async () => {
   return { data: rows };
 });
 
-app.get("/v1/config", async () => ({
-  data: {
-    brand: "mypets",
-    environment: process.env.APP_ENV ?? "production",
-    paymentsLive: process.env.PAYMENTS_LIVE === "true",
-    payoutsEnabled: process.env.PAYOUTS_ENABLED === "true",
-    authEnabled: Boolean(process.env.SUPABASE_URL && (process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY)),
-    growthEnabled: true,
-    causesEnabled: true,
-    socialProfilesEnabled: true,
-    discoveryEnabled: Boolean(process.env.DISCOVERY_INGEST_TOKEN),
-    claimCenterEnabled: true,
-    adminEnabled: Boolean((process.env.ADMIN_EMAILS ?? "").trim()),
-    mediaStorageEnabled: Boolean(process.env.SUPABASE_URL),
-    storyFallbackEnabled: true,
-  },
-}));
+app.get("/v1/config", async () => {
+  const paymentProvider = (process.env.PAYMENT_PROVIDER ?? "mock").toLowerCase();
+  const paymentCurrencies = [
+    ...(process.env.XPAYMENTS_API_KEY_EUR ? ["EUR"] : []),
+    ...(process.env.XPAYMENTS_API_KEY_BRL ? ["BRL"] : []),
+  ];
+  const paymentsLive = process.env.PAYMENTS_LIVE === "true" && paymentProvider === "xpayments" && paymentCurrencies.length > 0;
+
+  return {
+    data: {
+      brand: "mypets",
+      environment: process.env.APP_ENV ?? "production",
+      paymentsLive,
+      paymentProvider: paymentsLive ? "xpayments" : null,
+      paymentCurrencies,
+      embeddedCheckout: paymentsLive,
+      payoutsEnabled: process.env.PAYOUTS_ENABLED === "true",
+      authEnabled: Boolean(process.env.SUPABASE_URL && (process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY)),
+      growthEnabled: true,
+      causesEnabled: true,
+      socialProfilesEnabled: true,
+      discoveryEnabled: Boolean(process.env.DISCOVERY_INGEST_TOKEN),
+      claimCenterEnabled: true,
+      adminEnabled: Boolean((process.env.ADMIN_EMAILS ?? "").trim()),
+      mediaStorageEnabled: Boolean(process.env.SUPABASE_URL),
+      storyFallbackEnabled: true,
+    },
+  };
+});
 
 const newsletterSchema = z.object({
   email: z.string().email(),
@@ -251,6 +264,7 @@ await registerCauseRoutes(app, prisma);
 await registerSocialRoutes(app, prisma);
 await registerAdminRoutes(app, prisma);
 await registerMediaRoutes(app, prisma);
+await registerPaymentRoutes(app, prisma);
 
 app.setErrorHandler((error, _req, reply) => {
   app.log.error(error);
