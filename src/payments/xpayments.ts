@@ -25,6 +25,15 @@ export function checkoutBase() {
   return (process.env.XPAYMENTS_CHECKOUT_BASE ?? "https://checkout.xpayments.digital").replace(/\/$/, "");
 }
 
+function publicSiteOrigin() {
+  const value = process.env.PUBLIC_SITE_URL ?? "https://mypets.lat";
+  try {
+    return new URL(value).origin;
+  } catch {
+    return "https://mypets.lat";
+  }
+}
+
 export function xpaymentsConfigForCurrency(currency: "EUR" | "BRL") {
   const suffix = currency === "EUR" ? "EUR" : "BRL";
   const apiKey = process.env[`XPAYMENTS_API_KEY_${suffix}`] ?? "";
@@ -33,7 +42,14 @@ export function xpaymentsConfigForCurrency(currency: "EUR" | "BRL") {
 }
 
 export function xpaymentsCurrencyEnabled(currency: "EUR" | "BRL") {
-  return Boolean(xpaymentsConfigForCurrency(currency).apiKey);
+  const { apiKey, storeCode } = xpaymentsConfigForCurrency(currency);
+  return Boolean(apiKey && storeCode);
+}
+
+function assertEnvironmentSafe(apiKey: string, currency: "EUR" | "BRL") {
+  if (process.env.PAYMENTS_LIVE === "true" && !apiKey.startsWith("xp_live_")) {
+    throw new Error(`XPAYMENTS_${currency}_LIVE_KEY_REQUIRED`);
+  }
 }
 
 export async function createXPaymentsSession(input: {
@@ -44,7 +60,8 @@ export async function createXPaymentsSession(input: {
   metadata: Record<string, unknown>;
 }) {
   const { apiKey, storeCode } = xpaymentsConfigForCurrency(input.currency);
-  if (!apiKey) throw new Error(`XPAYMENTS_${input.currency}_NOT_CONFIGURED`);
+  if (!apiKey || !storeCode) throw new Error(`XPAYMENTS_${input.currency}_NOT_CONFIGURED`);
+  assertEnvironmentSafe(apiKey, input.currency);
 
   const response = await fetch(`${apiBase()}/checkout/session`, {
     method: "POST",
@@ -58,7 +75,11 @@ export async function createXPaymentsSession(input: {
       currency: input.currency,
       reference: input.reference,
       customerEmail: input.customerEmail ?? undefined,
-      metadata: input.metadata,
+      metadata: {
+        ...input.metadata,
+        mypetsCurrency: input.currency,
+        mypetsStoreCode: storeCode,
+      },
     }),
     signal: AbortSignal.timeout(12_000),
   });
@@ -72,11 +93,14 @@ export async function createXPaymentsSession(input: {
     throw new Error(message);
   }
 
+  const embedUrl = new URL(`/embed/${encodeURIComponent(parsed.data.data.sessionId)}`, `${checkoutBase()}/`);
+  embedUrl.searchParams.set("parent_origin", publicSiteOrigin());
+
   return {
     sessionId: parsed.data.data.sessionId,
     checkoutUrl: parsed.data.data.checkoutUrl,
-    embedUrl: `${checkoutBase()}/embed/${encodeURIComponent(parsed.data.data.sessionId)}`,
-    storeCode: storeCode || null,
+    embedUrl: embedUrl.toString(),
+    storeCode,
   };
 }
 
