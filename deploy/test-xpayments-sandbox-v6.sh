@@ -10,14 +10,11 @@ fail() { echo "ERROR: $*" >&2; exit 1; }
 [[ "$CURRENCY" == "EUR" || "$CURRENCY" == "BRL" ]] || fail "Usage: $0 [EUR|BRL]"
 docker inspect "$API_CONTAINER" >/dev/null 2>&1 || fail "Container $API_CONTAINER not found"
 
-KEY_VAR="XPAYMENTS_API_KEY_${CURRENCY}"
-STORE_VAR="XPAYMENTS_STORE_CODE_${CURRENCY}"
+STORE_CODE="$(docker exec "$API_CONTAINER" sh -lc "printenv XPAYMENTS_SANDBOX_STORE_CODE" 2>/dev/null || true)"
+KEY_PREFIX="$(docker exec "$API_CONTAINER" sh -lc "value=\$(printenv XPAYMENTS_SANDBOX_API_KEY); printf '%s' \"\${value:0:8}\"" 2>/dev/null || true)"
 
-KEY_PREFIX="$(docker exec "$API_CONTAINER" sh -lc "value=\$(printenv '$KEY_VAR'); printf '%s' \"\${value:0:8}\"" 2>/dev/null || true)"
-STORE_CODE="$(docker exec "$API_CONTAINER" sh -lc "printenv '$STORE_VAR'" 2>/dev/null || true)"
-
-[ -n "$STORE_CODE" ] || fail "$STORE_VAR is not configured"
-[[ "$KEY_PREFIX" == "xp_test_" ]] || fail "$KEY_VAR must be an xp_test_ key for this sandbox preflight"
+[ -n "$STORE_CODE" ] || fail "XPAYMENTS_SANDBOX_STORE_CODE is not configured"
+[[ "$KEY_PREFIX" == "xp_test_" ]] || fail "XPAYMENTS_SANDBOX_API_KEY must be an xp_test_ key"
 
 echo "XPAYMENTS sandbox preflight"
 echo "Currency: $CURRENCY"
@@ -25,11 +22,19 @@ echo "Store:    $STORE_CODE"
 echo "Key:      xp_test_... (hidden)"
 echo
 
-# Run through the same compiled adapter used by the MyPets API. The API key stays
-# inside the container environment and is never printed or passed on the command line.
+# The same compiled adapter is used with process-local sandbox overrides. Public
+# EUR/BRL credentials remain untouched, even if PAYMENTS_LIVE is enabled.
 docker exec "$API_CONTAINER" node --input-type=module -e "
-  const mod = await import('/app/dist/payments/xpayments.js');
   const currency = '$CURRENCY';
+  const sandboxKey = process.env.XPAYMENTS_SANDBOX_API_KEY || '';
+  const sandboxStore = process.env.XPAYMENTS_SANDBOX_STORE_CODE || '';
+  if (!sandboxKey.startsWith('xp_test_')) throw new Error('Missing sandbox key');
+  if (!sandboxStore) throw new Error('Missing sandbox Store');
+  process.env['XPAYMENTS_API_KEY_' + currency] = sandboxKey;
+  process.env['XPAYMENTS_STORE_CODE_' + currency] = sandboxStore;
+  process.env.PAYMENTS_LIVE = 'false';
+
+  const mod = await import('/app/dist/payments/xpayments.js');
   const reference = 'MYPETS-PREFLIGHT-' + Date.now();
   const session = await mod.createXPaymentsSession({
     amountCents: 100,
@@ -54,5 +59,5 @@ docker exec "$API_CONTAINER" node --input-type=module -e "
 
 echo
 echo "Preflight session created successfully."
-echo "This does NOT enable PAYMENTS_LIVE and does not credit any MyPets cause."
-echo "Open the checkout URL only when you are ready to perform the sandbox payment test."
+echo "Dedicated sandbox credentials were used; public EUR/BRL routing was not changed."
+echo "Open the checkout URL only when you are ready to perform a sandbox payment test."
