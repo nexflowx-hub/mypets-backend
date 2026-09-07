@@ -20,21 +20,22 @@ set_env() {
 }
 
 configure_currency() {
-  local currency="$1" answer store_code api_key webhook_secret
-  read -r -p "Configure MyPets ${currency} Store now? [y/N]: " answer
+  local currency="$1" answer store_code api_key webhook_secret expected_store
+  expected_store="MYPETS-${currency}"
+
+  read -r -p "Configure live ${expected_store} now? [y/N]: " answer
   [[ "$answer" =~ ^[Yy]$ ]] || return 0
 
-  read -r -p "XPAYMENTS Store code (${currency}): " store_code
-  [ -n "$store_code" ] || fail "Store code cannot be empty"
+  read -r -p "XPAYMENTS Store code (${currency}) [${expected_store}]: " store_code
+  store_code="${store_code:-$expected_store}"
+  [ "$store_code" = "$expected_store" ] || fail "Expected Store code ${expected_store}"
 
-  read -r -s -p "XPAYMENTS API key (${currency}) [hidden]: " api_key
+  read -r -s -p "XPAYMENTS live API key (${currency}) [hidden]: " api_key
   echo
-  [ -n "$api_key" ] || fail "API key cannot be empty"
-  [[ "$api_key" == xp_test_* || "$api_key" == xp_live_* ]] || fail "Unexpected XPAYMENTS key prefix"
+  [[ "$api_key" == xp_live_* ]] || fail "${expected_store} requires an xp_live_ API key; sandbox keys belong in XPAYMENTS_SANDBOX_API_KEY"
 
   read -r -s -p "XPAYMENTS webhook secret (${currency}) [hidden]: " webhook_secret
   echo
-  [ -n "$webhook_secret" ] || fail "Webhook secret cannot be empty"
   [[ "$webhook_secret" == whsec_* ]] || fail "Unexpected XPAYMENTS webhook secret prefix"
 
   set_env "XPAYMENTS_STORE_CODE_${currency}" "$store_code"
@@ -53,23 +54,28 @@ configure_currency BRL
 read -r -p "Enable public MyPets payments now? [y/N]: " enable
 if [[ "$enable" =~ ^[Yy]$ ]]; then
   configured_live=0
-  configured_test=0
   for currency in EUR BRL; do
+    expected_store="MYPETS-${currency}"
+    store_code="$(sed -n "s/^XPAYMENTS_STORE_CODE_${currency}=//p" "$ENV_FILE" | tail -1)"
     api_key="$(sed -n "s/^XPAYMENTS_API_KEY_${currency}=//p" "$ENV_FILE" | tail -1)"
     webhook_secret="$(sed -n "s/^XPAYMENTS_WEBHOOK_SECRET_${currency}=//p" "$ENV_FILE" | tail -1)"
 
-    if [[ "$api_key" == xp_test_* ]]; then
-      configured_test=$((configured_test + 1))
-    elif [[ "$api_key" == xp_live_* ]]; then
-      [[ "$webhook_secret" == whsec_* ]] || fail "${currency} has a live API key but no valid webhook secret"
+    if [ -n "$api_key" ]; then
+      [ "$store_code" = "$expected_store" ] || {
+        set_env "PAYMENTS_LIVE" "false"
+        fail "${currency} is configured but Store code is not ${expected_store}"
+      }
+      [[ "$api_key" == xp_live_* ]] || {
+        set_env "PAYMENTS_LIVE" "false"
+        fail "Refusing PAYMENTS_LIVE=true: ${currency} does not use xp_live_"
+      }
+      [[ "$webhook_secret" == whsec_* ]] || {
+        set_env "PAYMENTS_LIVE" "false"
+        fail "${currency} has a live API key but no valid webhook secret"
+      }
       configured_live=$((configured_live + 1))
     fi
   done
-
-  if [ "$configured_test" -gt 0 ]; then
-    set_env "PAYMENTS_LIVE" "false"
-    fail "Refusing PAYMENTS_LIVE=true while any XPAYMENTS xp_test_ key is configured"
-  fi
 
   [ "$configured_live" -gt 0 ] || {
     set_env "PAYMENTS_LIVE" "false"
@@ -99,4 +105,4 @@ done
 curl -fsS https://api.mypets.lat/v1/config
 echo
 
-echo "XPAYMENTS configuration saved server-side. Secret values were not printed."
+echo "XPAYMENTS live Store configuration saved server-side. Secret values were not printed."
