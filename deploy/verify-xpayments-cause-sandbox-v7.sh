@@ -16,7 +16,7 @@ fail() { echo "ERROR: $*" >&2; exit 1; }
 DB_URL="$(sed -n 's/^DIRECT_URL=//p' "$ENV_FILE" | tail -1)"
 [ -n "$DB_URL" ] || fail "DIRECT_URL is missing"
 
-STATE_SQL="select p.id, p.cause_id, p.provider_reference, coalesce(p.provider_session_id,''), p.amount_cents, p.currency, p.status, coalesce(c.raised_amount_cents,0), coalesce(c.is_public,false), coalesce(c.title,'') from public.payment_intents p left join public.causes c on c.id = p.cause_id where p.id = '${INTENT_ID}'::uuid limit 1;"
+STATE_SQL="select p.id, p.cause_id, p.provider_reference, coalesce(p.provider_session_id,''), p.amount_cents, p.currency, p.status, coalesce(c.raised_amount_cents,0), coalesce(c.is_public,false), coalesce(c.title,''), coalesce(p.metadata->>'sandboxReplayVerifiedAt','') from public.payment_intents p left join public.causes c on c.id = p.cause_id where p.id = '${INTENT_ID}'::uuid limit 1;"
 
 load_state() {
   docker run --rm postgres:16-alpine \
@@ -26,19 +26,20 @@ load_state() {
 
 ROW="$(load_state)"
 [ -n "$ROW" ] || fail "Payment intent not found"
-IFS='|' read -r ID CAUSE_ID REFERENCE SESSION_ID AMOUNT_CENTS CURRENCY INTENT_STATUS RAISED_CENTS IS_PUBLIC CAUSE_TITLE <<< "$ROW"
+IFS='|' read -r ID CAUSE_ID REFERENCE SESSION_ID AMOUNT_CENTS CURRENCY INTENT_STATUS RAISED_CENTS IS_PUBLIC CAUSE_TITLE REPLAY_VERIFIED_AT <<< "$ROW"
 [[ "$REFERENCE" =~ ^MYPETS-SANDBOX-[A-Za-z0-9._:-]+$ ]] || fail "Refusing to verify non-sandbox intent"
 [ "$IS_PUBLIC" = "f" ] || fail "Sandbox cause unexpectedly public"
 
 printf '\n==> MyPets sandbox state\n'
-printf 'Intent:     %s\n' "$ID"
-printf 'Cause:      %s\n' "$CAUSE_ID"
-printf 'Reference:  %s\n' "$REFERENCE"
-printf 'Amount:     %s %s cents\n' "$CURRENCY" "$AMOUNT_CENTS"
-printf 'Intent:     %s\n' "$INTENT_STATUS"
+printf 'Intent:       %s\n' "$ID"
+printf 'Cause:        %s\n' "$CAUSE_ID"
+printf 'Reference:    %s\n' "$REFERENCE"
+printf 'Amount:       %s %s cents\n' "$CURRENCY" "$AMOUNT_CENTS"
+printf 'Intent:       %s\n' "$INTENT_STATUS"
 printf 'Cause raised: %s cents\n' "$RAISED_CENTS"
-printf 'Public:     %s\n' "$IS_PUBLIC"
-printf 'Title:      %s\n' "$CAUSE_TITLE"
+printf 'Public:       %s\n' "$IS_PUBLIC"
+printf 'Title:        %s\n' "$CAUSE_TITLE"
+printf 'Replay check: %s\n' "${REPLAY_VERIFIED_AT:-not verified}"
 
 if [[ "$SESSION_ID" =~ ^[0-9a-fA-F-]{36}$ ]]; then
   printf '\n==> XPAYMENTS checkout session\n'
@@ -116,17 +117,23 @@ if (!response.ok) process.exit(2);
 NODE
 
   ROW_AFTER="$(load_state)"
-  IFS='|' read -r _ _ _ _ _ _ STATUS_AFTER RAISED_AFTER _ _ <<< "$ROW_AFTER"
+  IFS='|' read -r _ _ _ _ _ _ STATUS_AFTER RAISED_AFTER _ _ _ <<< "$ROW_AFTER"
   printf '\n==> State after replay\n'
   printf 'Intent status: %s\n' "$STATUS_AFTER"
   printf 'Cause raised:  %s cents\n' "$RAISED_AFTER"
   [ "$STATUS_AFTER" = "SUCCEEDED" ] || fail "Intent lost SUCCEEDED state after replay"
   [ "$RAISED_AFTER" -eq "$AMOUNT_CENTS" ] || fail "IDEMPOTENCY FAILURE: cause amount changed after duplicate webhook"
+
+  docker run --rm postgres:16-alpine \
+    psql --set=ON_ERROR_STOP=1 --dbname="$DB_URL" --command="update public.payment_intents set metadata = metadata || jsonb_build_object('sandboxReplayVerifiedAt', now()) where id = '${INTENT_ID}'::uuid;" >/dev/null
+
   echo "Idempotency PASS: duplicate webhook did not increment the cause again."
+  echo "Replay verification recorded on the sandbox payment intent."
 fi
 
 if [ "$MODE" = "--cleanup" ]; then
   [ "$INTENT_STATUS" = "SUCCEEDED" ] || fail "Cleanup is allowed only after a successful sandbox payment"
+  [ -n "$REPLAY_VERIFIED_AT" ] || fail "Cleanup blocked: run --replay successfully before removing the sandbox cause"
   printf '\n==> Removing hidden sandbox cause\n'
   docker run --rm postgres:16-alpine \
     psql --set=ON_ERROR_STOP=1 --dbname="$DB_URL" --command="delete from public.causes where id = '${CAUSE_ID}'::uuid and is_public = false and title = '[SANDBOX] XPAYMENTS E2E';"
@@ -143,4 +150,5 @@ PASS criteria before live activation:
 - Cause raised_amount_cents equals exactly the payment amount.
 - Webhook signature_valid = true and processing_status = PROCESSED.
 - With --replay, raised_amount_cents remains unchanged after the duplicate webhook.
+- Cleanup is blocked until the replay/idempotency test has passed.
 TXT
