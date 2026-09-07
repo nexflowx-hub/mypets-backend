@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-APP_DIR="/srv/apps/mypets/api"
 ENV_FILE="/srv/apps/mypets/env/api.env"
 API_CONTAINER="mypets-api"
 CURRENCY="${1:-EUR}"
@@ -15,12 +14,13 @@ fail() { echo "ERROR: $*" >&2; exit 1; }
 [[ "$AMOUNT_CENTS" =~ ^[0-9]+$ ]] || fail "Amount must be integer cents"
 [ "$AMOUNT_CENTS" -ge 100 ] || fail "Minimum sandbox amount is 100 cents"
 
-PAYMENTS_LIVE="$(sed -n 's/^PAYMENTS_LIVE=//p' "$ENV_FILE" | tail -1)"
-[ "$PAYMENTS_LIVE" != "true" ] || fail "Refusing sandbox preparation while PAYMENTS_LIVE=true"
+docker inspect "$API_CONTAINER" >/dev/null 2>&1 || fail "Container $API_CONTAINER not found"
 
-API_KEY="$(sed -n "s/^XPAYMENTS_API_KEY_${CURRENCY}=//p" "$ENV_FILE" | tail -1)"
-[[ "$API_KEY" == xp_test_* ]] || fail "${CURRENCY} must be configured with an xp_test_ key"
-unset API_KEY
+SANDBOX_STORE="$(sed -n 's/^XPAYMENTS_SANDBOX_STORE_CODE=//p' "$ENV_FILE" | tail -1)"
+SANDBOX_KEY="$(sed -n 's/^XPAYMENTS_SANDBOX_API_KEY=//p' "$ENV_FILE" | tail -1)"
+[ -n "$SANDBOX_STORE" ] || fail "XPAYMENTS_SANDBOX_STORE_CODE is not configured"
+[[ "$SANDBOX_KEY" == xp_test_* ]] || fail "XPAYMENTS_SANDBOX_API_KEY must be an xp_test_ key"
+unset SANDBOX_KEY
 
 DB_URL="$(sed -n 's/^DIRECT_URL=//p' "$ENV_FILE" | tail -1)"
 [ -n "$DB_URL" ] || fail "DIRECT_URL is missing"
@@ -98,10 +98,11 @@ IFS='|' read -r INTENT_ID CAUSE_ID PROTECTOR_ID <<< "$ROW"
 [[ "$INTENT_ID" =~ ^[0-9a-fA-F-]{36}$ ]] || fail "Invalid intent id returned"
 [[ "$CAUSE_ID" =~ ^[0-9a-fA-F-]{36}$ ]] || fail "Invalid cause id returned"
 
-printf 'Cause:     %s\n' "$CAUSE_ID"
-printf 'Intent:    %s\n' "$INTENT_ID"
-printf 'Reference: %s\n' "$REFERENCE"
-printf 'Amount:    %s %s cents\n' "$CURRENCY" "$AMOUNT_CENTS"
+printf 'Cause:      %s\n' "$CAUSE_ID"
+printf 'Intent:     %s\n' "$INTENT_ID"
+printf 'Reference:  %s\n' "$REFERENCE"
+printf 'Amount:     %s %s cents\n' "$CURRENCY" "$AMOUNT_CENTS"
+printf 'Store:      %s\n' "$SANDBOX_STORE"
 printf 'Visibility: hidden (is_public=false)\n'
 
 printf '\n==> Creating XPAYMENTS sandbox checkout session\n'
@@ -114,14 +115,25 @@ docker exec -i \
   -e XP_SANDBOX_AMOUNT_CENTS="$AMOUNT_CENTS" \
   "$API_CONTAINER" node --input-type=module - <<'NODE'
 import { PrismaClient } from '@prisma/client';
-import { createXPaymentsSession } from './dist/payments/xpayments.js';
 
+const currency = process.env.XP_SANDBOX_CURRENCY;
+const sandboxKey = process.env.XPAYMENTS_SANDBOX_API_KEY || '';
+const sandboxStore = process.env.XPAYMENTS_SANDBOX_STORE_CODE || '';
+if (!sandboxKey.startsWith('xp_test_')) throw new Error('Missing XPAYMENTS sandbox test key');
+if (!sandboxStore) throw new Error('Missing XPAYMENTS sandbox Store code');
+
+// The adapter is reused with process-local overrides only. Production EUR/BRL
+// credentials in the container remain untouched and PAYMENTS_LIVE may stay true.
+process.env[`XPAYMENTS_API_KEY_${currency}`] = sandboxKey;
+process.env[`XPAYMENTS_STORE_CODE_${currency}`] = sandboxStore;
+process.env.PAYMENTS_LIVE = 'false';
+
+const { createXPaymentsSession } = await import('./dist/payments/xpayments.js');
 const prisma = new PrismaClient();
 const intentId = process.env.XP_SANDBOX_INTENT_ID;
 const causeId = process.env.XP_SANDBOX_CAUSE_ID;
 const protectorId = process.env.XP_SANDBOX_PROTECTOR_ID;
 const reference = process.env.XP_SANDBOX_REFERENCE;
-const currency = process.env.XP_SANDBOX_CURRENCY;
 const amountCents = Number(process.env.XP_SANDBOX_AMOUNT_CENTS);
 
 try {
@@ -161,7 +173,7 @@ try {
     checkoutUrl: session.checkoutUrl,
     embedUrl: session.embedUrl,
     storeCode: session.storeCode,
-    paymentsLive: false,
+    publicPaymentsStateUnaffected: true,
   }, null, 2));
 } catch (error) {
   await prisma.$executeRaw`
@@ -182,7 +194,7 @@ cat <<'TXT'
 
 Sandbox preparation complete.
 - The cause is hidden and cannot appear in public MyPets listings.
-- PAYMENTS_LIVE remains false.
-- Open only the returned XPAYMENTS checkout URL and use Stripe TEST data.
+- Dedicated sandbox credentials were used; public EUR/BRL credentials were not changed.
+- Open only the returned XPAYMENTS checkout URL and use TEST data.
 - After payment, run deploy/verify-xpayments-cause-sandbox-v7.sh <intent-id>.
 TXT
