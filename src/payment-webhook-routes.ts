@@ -23,12 +23,20 @@ type IntentRow = {
   status: string;
 };
 
+type WebhookMode = "auto" | "sandbox";
+
 function isSandboxReference(reference: string) {
   return reference.startsWith("MYPETS-SANDBOX-") || reference.startsWith("MYPETS-PREFLIGHT-");
 }
 
 function webhookSecret(currency: string, sandbox: boolean) {
-  if (sandbox) return process.env.XPAYMENTS_SANDBOX_WEBHOOK_SECRET ?? "";
+  if (sandbox) {
+    const dedicated = process.env.XPAYMENTS_SANDBOX_WEBHOOK_SECRET ?? "";
+    if (dedicated) return dedicated;
+    // Backward-compatible migration path while the existing sandbox Store still
+    // points to the historical endpoint and uses the former EUR secret slot.
+    return process.env.XPAYMENTS_WEBHOOK_SECRET_EUR ?? "";
+  }
   const normalized = currency.toUpperCase();
   if (normalized === "EUR") return process.env.XPAYMENTS_WEBHOOK_SECRET_EUR ?? "";
   if (normalized === "BRL") return process.env.XPAYMENTS_WEBHOOK_SECRET_BRL ?? "";
@@ -73,16 +81,16 @@ async function markSucceeded(prisma: PrismaClient, intent: IntentRow) {
   });
 }
 
-function webhookHandler(app: FastifyInstance, prisma: PrismaClient, sandbox: boolean) {
+function webhookHandler(app: FastifyInstance, prisma: PrismaClient, mode: WebhookMode) {
   return async (req: FastifyRequest, reply: FastifyReply) => {
     const parsed = webhookSchema.safeParse(req.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: { code: "INVALID_WEBHOOK", message: "Invalid XPAYMENTS webhook payload" } });
     }
 
-    const referenceIsSandbox = isSandboxReference(parsed.data.reference);
-    if (sandbox !== referenceIsSandbox) {
-      app.log.warn({ reference: parsed.data.reference, sandboxRoute: sandbox }, "Rejected XPAYMENTS webhook on wrong environment route");
+    const sandbox = isSandboxReference(parsed.data.reference);
+    if (mode === "sandbox" && !sandbox) {
+      app.log.warn({ reference: parsed.data.reference }, "Rejected non-sandbox XPAYMENTS webhook on sandbox route");
       return reply.code(400).send({ error: { code: "WEBHOOK_ENVIRONMENT_MISMATCH", message: "Webhook environment mismatch" } });
     }
 
@@ -167,6 +175,7 @@ function webhookHandler(app: FastifyInstance, prisma: PrismaClient, sandbox: boo
 }
 
 export async function registerPaymentWebhookRoutes(app: FastifyInstance, prisma: PrismaClient) {
-  app.post("/v1/payments/webhooks/xpayments", webhookHandler(app, prisma, false));
-  app.post("/v1/payments/webhooks/xpayments-sandbox", webhookHandler(app, prisma, true));
+  // Historical endpoint remains auto-routing for a zero-downtime migration.
+  app.post("/v1/payments/webhooks/xpayments", webhookHandler(app, prisma, "auto"));
+  app.post("/v1/payments/webhooks/xpayments-sandbox", webhookHandler(app, prisma, "sandbox"));
 }
