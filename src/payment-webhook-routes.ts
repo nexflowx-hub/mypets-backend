@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { PrismaClient } from "@prisma/client";
 import { z } from "zod";
 
@@ -23,7 +23,12 @@ type IntentRow = {
   status: string;
 };
 
-function webhookSecret(currency: string) {
+function isSandboxReference(reference: string) {
+  return reference.startsWith("MYPETS-SANDBOX-") || reference.startsWith("MYPETS-PREFLIGHT-");
+}
+
+function webhookSecret(currency: string, sandbox: boolean) {
+  if (sandbox) return process.env.XPAYMENTS_SANDBOX_WEBHOOK_SECRET ?? "";
   const normalized = currency.toUpperCase();
   if (normalized === "EUR") return process.env.XPAYMENTS_WEBHOOK_SECRET_EUR ?? "";
   if (normalized === "BRL") return process.env.XPAYMENTS_WEBHOOK_SECRET_BRL ?? "";
@@ -68,23 +73,29 @@ async function markSucceeded(prisma: PrismaClient, intent: IntentRow) {
   });
 }
 
-export async function registerPaymentWebhookRoutes(app: FastifyInstance, prisma: PrismaClient) {
-  app.post("/v1/payments/webhooks/xpayments", async (req, reply) => {
+function webhookHandler(app: FastifyInstance, prisma: PrismaClient, sandbox: boolean) {
+  return async (req: FastifyRequest, reply: FastifyReply) => {
     const parsed = webhookSchema.safeParse(req.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: { code: "INVALID_WEBHOOK", message: "Invalid XPAYMENTS webhook payload" } });
     }
 
+    const referenceIsSandbox = isSandboxReference(parsed.data.reference);
+    if (sandbox !== referenceIsSandbox) {
+      app.log.warn({ reference: parsed.data.reference, sandboxRoute: sandbox }, "Rejected XPAYMENTS webhook on wrong environment route");
+      return reply.code(400).send({ error: { code: "WEBHOOK_ENVIRONMENT_MISMATCH", message: "Webhook environment mismatch" } });
+    }
+
     const currency = parsed.data.currency.toUpperCase();
-    const secret = webhookSecret(currency);
+    const secret = webhookSecret(currency, sandbox);
     if (!secret) {
-      app.log.error({ currency }, "XPAYMENTS webhook secret is not configured");
+      app.log.error({ currency, sandbox }, "XPAYMENTS webhook secret is not configured");
       return reply.code(503).send({ error: { code: "WEBHOOK_NOT_CONFIGURED", message: "Webhook verification is not configured" } });
     }
 
     const signature = String(req.headers["x-nexflowx-signature"] ?? "");
     if (!validSignature(req.body, signature, secret)) {
-      app.log.warn({ currency }, "Rejected XPAYMENTS webhook with invalid signature");
+      app.log.warn({ currency, sandbox }, "Rejected XPAYMENTS webhook with invalid signature");
       return reply.code(401).send({ error: { code: "INVALID_SIGNATURE", message: "Invalid webhook signature" } });
     }
 
@@ -115,7 +126,7 @@ export async function registerPaymentWebhookRoutes(app: FastifyInstance, prisma:
 
     const webhookAmountCents = Math.round(Number(parsed.data.amount) * 100);
     if (!Number.isFinite(webhookAmountCents) || webhookAmountCents !== intent.amount_cents || currency !== intent.currency) {
-      app.log.error({ intentId: intent.id, webhookAmountCents, expectedAmountCents: intent.amount_cents, currency, expectedCurrency: intent.currency }, "XPAYMENTS webhook amount/currency mismatch");
+      app.log.error({ intentId: intent.id, webhookAmountCents, expectedAmountCents: intent.amount_cents, currency, expectedCurrency: intent.currency, sandbox }, "XPAYMENTS webhook amount/currency mismatch");
       await prisma.$executeRaw`
         update public.payment_provider_events
         set processing_status = 'FAILED', processed_at = now(), processing_error = 'amount_or_currency_mismatch'
@@ -144,7 +155,7 @@ export async function registerPaymentWebhookRoutes(app: FastifyInstance, prisma:
 
       return reply.code(200).send({ received: true, intentId: intent.id, status: nextStatus });
     } catch (error) {
-      app.log.error({ err: error, intentId: intent.id }, "XPAYMENTS webhook processing failed");
+      app.log.error({ err: error, intentId: intent.id, sandbox }, "XPAYMENTS webhook processing failed");
       await prisma.$executeRaw`
         update public.payment_provider_events
         set processing_status = 'FAILED', processed_at = now(), processing_error = 'processing_error'
@@ -152,5 +163,10 @@ export async function registerPaymentWebhookRoutes(app: FastifyInstance, prisma:
       `;
       return reply.code(500).send({ error: { code: "WEBHOOK_PROCESSING_FAILED", message: "Webhook processing failed" } });
     }
-  });
+  };
+}
+
+export async function registerPaymentWebhookRoutes(app: FastifyInstance, prisma: PrismaClient) {
+  app.post("/v1/payments/webhooks/xpayments", webhookHandler(app, prisma, false));
+  app.post("/v1/payments/webhooks/xpayments-sandbox", webhookHandler(app, prisma, true));
 }
