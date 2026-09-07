@@ -52,16 +52,30 @@ configure_currency BRL
 
 read -r -p "Enable public MyPets payments now? [y/N]: " enable
 if [[ "$enable" =~ ^[Yy]$ ]]; then
-  configured=0
+  configured_live=0
+  configured_test=0
   for currency in EUR BRL; do
     api_key="$(sed -n "s/^XPAYMENTS_API_KEY_${currency}=//p" "$ENV_FILE" | tail -1)"
     webhook_secret="$(sed -n "s/^XPAYMENTS_WEBHOOK_SECRET_${currency}=//p" "$ENV_FILE" | tail -1)"
-    if [[ "$api_key" == xp_test_* || "$api_key" == xp_live_* ]]; then
-      [[ "$webhook_secret" == whsec_* ]] || fail "${currency} has an API key but no valid webhook secret"
-      configured=$((configured + 1))
+
+    if [[ "$api_key" == xp_test_* ]]; then
+      configured_test=$((configured_test + 1))
+    elif [[ "$api_key" == xp_live_* ]]; then
+      [[ "$webhook_secret" == whsec_* ]] || fail "${currency} has a live API key but no valid webhook secret"
+      configured_live=$((configured_live + 1))
     fi
   done
-  [ "$configured" -gt 0 ] || fail "No complete XPAYMENTS Store configuration is present"
+
+  if [ "$configured_test" -gt 0 ]; then
+    set_env "PAYMENTS_LIVE" "false"
+    fail "Refusing PAYMENTS_LIVE=true while any XPAYMENTS xp_test_ key is configured"
+  fi
+
+  [ "$configured_live" -gt 0 ] || {
+    set_env "PAYMENTS_LIVE" "false"
+    fail "No complete XPAYMENTS live Store configuration is present"
+  }
+
   set_env "PAYMENTS_LIVE" "true"
 else
   set_env "PAYMENTS_LIVE" "false"
