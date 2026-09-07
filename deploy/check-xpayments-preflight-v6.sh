@@ -15,7 +15,7 @@ SESSION_ID="$1"
 REFERENCE="$2"
 
 [[ "$SESSION_ID" =~ ^[0-9a-fA-F-]{36}$ ]] || fail "Invalid session id"
-[[ "$REFERENCE" == MYPETS-PREFLIGHT-* ]] || fail "Expected a MYPETS-PREFLIGHT-* reference"
+[[ "$REFERENCE" =~ ^MYPETS-PREFLIGHT-[A-Za-z0-9._:-]+$ ]] || fail "Invalid preflight reference"
 
 DB_URL="$(sed -n 's/^DIRECT_URL=//p' "$ENV_FILE" | tail -1)"
 [ -n "$DB_URL" ] || fail "DIRECT_URL is missing"
@@ -32,23 +32,22 @@ console.log(JSON.stringify({ httpStatus: res.status, body }, null, 2));
 if (!res.ok) process.exit(2);
 NODE
 
-# Pass the reference as a connection setting instead of interpolating shell text into SQL.
-# Preflight references are constrained to MYPETS-PREFLIGHT-* and contain no whitespace.
-PGOPTIONS_REF="-c mypets.preflight_reference=${REFERENCE}"
+# REFERENCE is interpolated only after the strict allowlist above. The accepted
+# character set deliberately excludes quotes, backslashes and whitespace.
+INTENT_SQL="select count(*) from public.payment_intents where provider_reference = '${REFERENCE}';"
+WEBHOOK_SQL="select event_type, signature_valid, processing_status, coalesce(processing_error,'') as processing_error, received_at from public.payment_provider_events where payload->>'reference' = '${REFERENCE}' order by received_at desc;"
 
 printf '\n==> MyPets payment intent count for preflight reference (expected: 0)\n'
 docker run --rm \
-  -e PGOPTIONS="$PGOPTIONS_REF" \
   postgres:16-alpine \
-  psql --set=ON_ERROR_STOP=1 --tuples-only --no-align --dbname="$DB_URL" --command="select count(*) from public.payment_intents where provider_reference = current_setting('mypets.preflight_reference');"
+  psql --set=ON_ERROR_STOP=1 --tuples-only --no-align --dbname="$DB_URL" --command="$INTENT_SQL"
 
 printf '\n==> MyPets webhook audit for preflight reference\n'
 docker run --rm \
-  -e PGOPTIONS="$PGOPTIONS_REF" \
   postgres:16-alpine \
-  psql --set=ON_ERROR_STOP=1 --pset=pager=off --dbname="$DB_URL" --command="select event_type, signature_valid, processing_status, coalesce(processing_error,'') as processing_error, received_at from public.payment_provider_events where payload->>'reference' = current_setting('mypets.preflight_reference') order by received_at desc;"
+  psql --set=ON_ERROR_STOP=1 --pset=pager=off --dbname="$DB_URL" --command="$WEBHOOK_SQL"
 
-unset DB_URL PGOPTIONS_REF
+unset DB_URL INTENT_SQL WEBHOOK_SQL
 
 cat <<'TXT'
 
