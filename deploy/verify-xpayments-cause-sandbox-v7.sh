@@ -86,23 +86,22 @@ if [ "$MODE" = "--replay" ]; then
     "$API_CONTAINER" node --input-type=module - <<'NODE'
 import crypto from 'node:crypto';
 
-const currency = process.env.XP_REPLAY_CURRENCY;
-const secret = process.env[`XPAYMENTS_WEBHOOK_SECRET_${currency}`] || '';
-if (!secret.startsWith('whsec_')) throw new Error(`Missing webhook secret for ${currency}`);
+const secret = process.env.XPAYMENTS_SANDBOX_WEBHOOK_SECRET || '';
+if (!secret.startsWith('whsec_')) throw new Error('Missing XPAYMENTS_SANDBOX_WEBHOOK_SECRET');
 
 const payload = {
   event: process.env.XP_REPLAY_EVENT,
   transaction_id: process.env.XP_REPLAY_TX_ID,
   reference: process.env.XP_REPLAY_REFERENCE,
   amount: process.env.XP_REPLAY_AMOUNT,
-  currency,
+  currency: process.env.XP_REPLAY_CURRENCY,
   status: process.env.XP_REPLAY_STATUS,
   method: process.env.XP_REPLAY_METHOD || null,
   timestamp: process.env.XP_REPLAY_TIMESTAMP,
 };
 const raw = JSON.stringify(payload);
 const signature = crypto.createHmac('sha256', secret).update(raw).digest('hex');
-const response = await fetch('https://api.mypets.lat/v1/payments/webhooks/xpayments', {
+const response = await fetch('https://api.mypets.lat/v1/payments/webhooks/xpayments-sandbox', {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
@@ -144,11 +143,11 @@ unset DB_URL
 
 cat <<'TXT'
 
-PASS criteria before live activation:
-- XPAYMENTS session status = succeeded/completed.
-- MyPets payment_intent status = SUCCEEDED.
-- Cause raised_amount_cents equals exactly the payment amount.
-- Webhook signature_valid = true and processing_status = PROCESSED.
+PASS criteria before/after live activation:
+- XPAYMENTS sandbox session status = succeeded/completed.
+- MyPets sandbox payment_intent status = SUCCEEDED.
+- Hidden cause raised_amount_cents equals exactly the test payment amount.
+- Sandbox webhook signature_valid = true and processing_status = PROCESSED.
 - With --replay, raised_amount_cents remains unchanged after the duplicate webhook.
-- Cleanup is blocked until the replay/idempotency test has passed.
+- Sandbox credentials remain isolated from public EUR/BRL Stores.
 TXT
