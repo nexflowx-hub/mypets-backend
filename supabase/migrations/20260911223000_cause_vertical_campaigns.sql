@@ -42,3 +42,58 @@ comment on column public.causes.campaign_key is
   'Stable campaign identifier used for attribution and dedicated landing aliases.';
 comment on column public.causes.campaign_meta is
   'Public-safe presentation metadata for the campaign landing. Never stores payment secrets or private evidence.';
+
+-- First-party funnel analytics are derived from server-side payment intent state.
+-- A browser callback never creates DONATION_COMPLETED. The event is emitted only
+-- when the verified backend state transitions to SUCCEEDED.
+create or replace function public.track_payment_intent_growth_event()
+returns trigger
+language plpgsql
+as $$
+declare
+  event_to_insert text;
+  cause_slug text;
+begin
+  if new.cause_id is null or old.status is not distinct from new.status then
+    return new;
+  end if;
+
+  if new.status = 'PENDING' and old.status = 'CREATED' then
+    event_to_insert := 'DONATION_STARTED';
+  elsif new.status = 'SUCCEEDED' and old.status <> 'SUCCEEDED' then
+    event_to_insert := 'DONATION_COMPLETED';
+  else
+    return new;
+  end if;
+
+  select slug into cause_slug from public.causes where id = new.cause_id;
+
+  insert into public.growth_events (
+    user_id, event_name, source, medium, campaign, content, landing_path, metadata
+  ) values (
+    new.user_id,
+    event_to_insert,
+    new.source,
+    new.medium,
+    new.campaign,
+    new.content,
+    case when cause_slug is null then null else '/causas/' || cause_slug end,
+    jsonb_build_object(
+      'paymentIntentId', new.id,
+      'causeId', new.cause_id,
+      'amountCents', new.amount_cents,
+      'currency', new.currency,
+      'refCode', new.ref_code,
+      'provider', new.provider,
+      'status', new.status
+    )
+  );
+
+  return new;
+end;
+$$;
+
+drop trigger if exists payment_intents_growth_events on public.payment_intents;
+create trigger payment_intents_growth_events
+after update of status on public.payment_intents
+for each row execute function public.track_payment_intent_growth_event();
