@@ -82,15 +82,13 @@ jobs:
             end
           $$;
           SQL
-      - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260904193000_init.sql
-      - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260905033000_core_platform.sql
-      - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260905050500_identity_roles.sql
-      - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260905054000_growth_funnels.sql
-      - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260905060000_causes_sponsorships.sql
-      - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260905150000_admin_claim_center.sql
-      - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260905193000_pet_media_storage.sql
-      - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260905203500_story_catalog_fallback.sql
-      - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260906224500_xpayments_checkout.sql
+      - name: Apply all Supabase migrations in order
+        run: |
+          set -euo pipefail
+          for migration in $(find supabase/migrations -maxdepth 1 -type f -name '*.sql' | sort); do
+            echo "Applying $migration"
+            psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f "$migration"
+          done
       - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/seed.sql
       - run: npm run typecheck
       - run: npm run build
