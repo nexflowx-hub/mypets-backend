@@ -33,22 +33,36 @@ docker run --rm \
   sh -ec "psql \"\$DIRECT_URL\" -v ON_ERROR_STOP=1 -f /sql/migrations/$MIGRATION"
 
 log "Verifying campaign columns and trigger"
-docker run --rm \
-  -e DIRECT_URL="$DB_URL" \
-  postgres:16-alpine \
-  sh -ec 'psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -Atc "
-    select string_agg(column_name, ',' order by column_name)
-    from information_schema.columns
-    where table_schema = '"'"'public'"'"'
-      and table_name = '"'"'causes'"'"'
-      and column_name in ('"'"'vertical'"'"','"'"'campaign_key'"'"','"'"'campaign_meta'"'"');
-    select tgname
+VERIFY_OUTPUT="$(
+  docker run --rm -i \
+    -e DIRECT_URL="$DB_URL" \
+    postgres:16-alpine \
+    sh -ec 'psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -At' <<'SQL'
+select case
+  when count(*) = 3 then 'campaign_columns_ok'
+  else 'campaign_columns_missing'
+end
+from information_schema.columns
+where table_schema = 'public'
+  and table_name = 'causes'
+  and column_name in ('vertical','campaign_key','campaign_meta');
+
+select case
+  when exists (
+    select 1
     from pg_trigger
-    where tgrelid = '"'"'public.payment_intents'"'"'::regclass
-      and tgname = '"'"'payment_intents_growth_events'"'"'
-      and not tgisinternal;
-  "'
-unset DB_URL
+    where tgrelid = 'public.payment_intents'::regclass
+      and tgname = 'payment_intents_growth_events'
+      and not tgisinternal
+  ) then 'growth_trigger_ok'
+  else 'growth_trigger_missing'
+end;
+SQL
+)"
+printf '%s\n' "$VERIFY_OUTPUT"
+grep -qx 'campaign_columns_ok' <<<"$VERIFY_OUTPUT" || fail "Campaign columns verification failed"
+grep -qx 'growth_trigger_ok' <<<"$VERIFY_OUTPUT" || fail "Growth trigger verification failed"
+unset DB_URL VERIFY_OUTPUT
 
 log "Building and restarting only MyPets API"
 docker compose -p mypets -f "$COMPOSE_FILE" up -d --build
