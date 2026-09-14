@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
-import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { Transform } from "node:stream";
+import type { FastifyInstance, FastifyReply, FastifyRequest, RouteShorthandOptions } from "fastify";
 import type { PrismaClient } from "@prisma/client";
 import { z } from "zod";
 
@@ -14,16 +15,42 @@ const webhookSchema = z.object({
   timestamp: z.string().min(1).max(80),
 });
 
+type RawBodyRequest = FastifyRequest & { rawBody?: string };
+
 type IntentRow = {
   id: string;
   cause_id: string | null;
+  provider_transaction_id: string | null;
   provider_reference: string;
+  payment_method: string | null;
   amount_cents: number;
   currency: "EUR" | "BRL";
   status: string;
 };
 
 type WebhookMode = "auto" | "sandbox";
+
+const rawJsonRouteOptions = {
+  preParsing(req, _reply, payload, done) {
+    const chunks: Buffer[] = [];
+    const capture = new Transform({
+      transform(chunk, _encoding, callback) {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        chunks.push(buffer);
+        (capture as Transform & { receivedEncodedLength?: number }).receivedEncodedLength =
+          ((capture as Transform & { receivedEncodedLength?: number }).receivedEncodedLength ?? 0) + buffer.length;
+        callback(null, chunk);
+      },
+      flush(callback) {
+        (req as RawBodyRequest).rawBody = Buffer.concat(chunks).toString("utf8");
+        callback();
+      },
+    });
+    payload.on("error", (error) => capture.destroy(error));
+    payload.pipe(capture);
+    done(null, capture);
+  },
+} satisfies RouteShorthandOptions;
 
 function isSandboxReference(reference: string) {
   return reference.startsWith("MYPETS-SANDBOX-") || reference.startsWith("MYPETS-PREFLIGHT-");
@@ -33,8 +60,6 @@ function webhookSecret(currency: string, sandbox: boolean) {
   if (sandbox) {
     const dedicated = process.env.XPAYMENTS_SANDBOX_WEBHOOK_SECRET ?? "";
     if (dedicated) return dedicated;
-    // Backward-compatible migration path while the existing sandbox Store still
-    // points to the historical endpoint and uses the former EUR secret slot.
     return process.env.XPAYMENTS_WEBHOOK_SECRET_EUR ?? "";
   }
   const normalized = currency.toUpperCase();
@@ -43,9 +68,9 @@ function webhookSecret(currency: string, sandbox: boolean) {
   return "";
 }
 
-function validSignature(payload: unknown, signature: string, secret: string) {
-  if (!signature || !secret) return false;
-  const expected = crypto.createHmac("sha256", secret).update(JSON.stringify(payload)).digest("hex");
+function validSignature(rawBody: string, signature: string, secret: string) {
+  if (!rawBody || !signature || !secret) return false;
+  const expected = crypto.createHmac("sha256", secret).update(rawBody, "utf8").digest("hex");
   const actualBuffer = Buffer.from(signature.trim().toLowerCase(), "utf8");
   const expectedBuffer = Buffer.from(expected, "utf8");
   return actualBuffer.length === expectedBuffer.length && crypto.timingSafeEqual(actualBuffer, expectedBuffer);
@@ -67,7 +92,7 @@ async function markSucceeded(prisma: PrismaClient, intent: IntentRow) {
       update public.payment_intents
       set status = 'SUCCEEDED', succeeded_at = coalesce(succeeded_at, now()), updated_at = now()
       where id = ${intent.id}::uuid and status <> 'SUCCEEDED'
-      returning id, cause_id, provider_reference, amount_cents, currency, status
+      returning id, cause_id, provider_transaction_id, provider_reference, payment_method, amount_cents, currency, status
     `;
     const row = changed[0];
     if (row?.cause_id) {
@@ -101,8 +126,13 @@ function webhookHandler(app: FastifyInstance, prisma: PrismaClient, mode: Webhoo
       return reply.code(503).send({ error: { code: "WEBHOOK_NOT_CONFIGURED", message: "Webhook verification is not configured" } });
     }
 
+    const rawBody = (req as RawBodyRequest).rawBody ?? "";
+    if (!rawBody) {
+      app.log.error({ currency, sandbox }, "XPAYMENTS webhook raw body was not captured");
+      return reply.code(400).send({ error: { code: "RAW_BODY_REQUIRED", message: "Webhook raw body is required" } });
+    }
     const signature = String(req.headers["x-nexflowx-signature"] ?? "");
-    if (!validSignature(req.body, signature, secret)) {
+    if (!validSignature(rawBody, signature, secret)) {
       app.log.warn({ currency, sandbox }, "Rejected XPAYMENTS webhook with invalid signature");
       return reply.code(401).send({ error: { code: "INVALID_SIGNATURE", message: "Invalid webhook signature" } });
     }
@@ -117,19 +147,37 @@ function webhookHandler(app: FastifyInstance, prisma: PrismaClient, mode: Webhoo
     `;
 
     const intents = await prisma.$queryRaw<IntentRow[]>`
-      select id, cause_id, provider_reference, amount_cents, currency, status
+      select id, cause_id, provider_transaction_id, provider_reference, payment_method, amount_cents, currency, status
       from public.payment_intents
-      where provider = 'XPAYMENTS' and provider_reference = ${parsed.data.reference}
+      where provider = 'XPAYMENTS'
+        and (
+          provider_transaction_id = ${parsed.data.transaction_id}
+          or (provider_transaction_id is null and provider_reference = ${parsed.data.reference})
+        )
+      order by case when provider_transaction_id = ${parsed.data.transaction_id} then 0 else 1 end
       limit 1
     `;
-    const intent = intents[0];
+    let intent = intents[0];
     if (!intent) {
       await prisma.$executeRaw`
         update public.payment_provider_events
-        set processing_status = 'IGNORED', processed_at = now(), processing_error = 'reference_not_found'
+        set processing_status = 'IGNORED', processed_at = now(), processing_error = 'transaction_not_correlated'
         where provider = 'XPAYMENTS' and provider_event_id = ${providerEventId}
       `;
+      app.log.warn({ transactionId: parsed.data.transaction_id, reference: parsed.data.reference }, "Signed XPAYMENTS event could not be correlated to a MyPets intent");
       return reply.code(200).send({ received: true, ignored: true });
+    }
+
+    if (!intent.provider_transaction_id) {
+      const bound = await prisma.$queryRaw<IntentRow[]>`
+        update public.payment_intents
+        set provider_transaction_id = ${parsed.data.transaction_id},
+            payment_method = coalesce(payment_method, ${parsed.data.method ?? null}),
+            updated_at = now()
+        where id = ${intent.id}::uuid and provider_transaction_id is null
+        returning id, cause_id, provider_transaction_id, provider_reference, payment_method, amount_cents, currency, status
+      `;
+      if (bound[0]) intent = bound[0];
     }
 
     const webhookAmountCents = Math.round(Number(parsed.data.amount) * 100);
@@ -150,7 +198,7 @@ function webhookHandler(app: FastifyInstance, prisma: PrismaClient, mode: Webhoo
       } else if (intent.status !== "SUCCEEDED") {
         await prisma.$executeRaw`
           update public.payment_intents
-          set status = ${nextStatus}, updated_at = now()
+          set status = ${nextStatus}, payment_method = coalesce(payment_method, ${parsed.data.method ?? null}), updated_at = now()
           where id = ${intent.id}::uuid and status <> 'SUCCEEDED'
         `;
       }
@@ -175,7 +223,6 @@ function webhookHandler(app: FastifyInstance, prisma: PrismaClient, mode: Webhoo
 }
 
 export async function registerPaymentWebhookRoutes(app: FastifyInstance, prisma: PrismaClient) {
-  // Historical endpoint remains auto-routing for a zero-downtime migration.
-  app.post("/v1/payments/webhooks/xpayments", webhookHandler(app, prisma, "auto"));
-  app.post("/v1/payments/webhooks/xpayments-sandbox", webhookHandler(app, prisma, "sandbox"));
+  app.post("/v1/payments/webhooks/xpayments", rawJsonRouteOptions, webhookHandler(app, prisma, "auto"));
+  app.post("/v1/payments/webhooks/xpayments-sandbox", rawJsonRouteOptions, webhookHandler(app, prisma, "sandbox"));
 }
