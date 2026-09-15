@@ -29,7 +29,7 @@ const checkoutSessionResponse = z.object({
 
 const LIVE_STORE_CODES: Record<PaymentCurrency, string> = {
   EUR: "MYPETS-EUR",
-  BRL: "MYPETS-BR",
+  BRL: "MYPETS-BRL",
 };
 
 const ALLOWED_NATIVE_METHODS: Record<PaymentCurrency, NativePaymentMethod[]> = {
