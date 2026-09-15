@@ -18,6 +18,7 @@ import { registerCampaignAdminRoutes } from "./campaign-admin-routes.js";
 import { registerMediaRoutes } from "./media-routes.js";
 import { registerPaymentRoutes } from "./payment-routes.js";
 import { registerPaymentWebhookRoutes } from "./payment-webhook-routes.js";
+import { xpaymentsCurrencyEnabled, type PaymentCurrency } from "./payments/xpayments.js";
 
 const prisma = new PrismaClient();
 const app = Fastify({ logger: true, trustProxy: true });
@@ -130,10 +131,8 @@ app.get("/v1/impact/public", async () => {
 
 app.get("/v1/config", async () => {
   const paymentProvider = (process.env.PAYMENT_PROVIDER ?? "mock").toLowerCase();
-  const paymentCurrencies = [
-    ...(process.env.XPAYMENTS_API_KEY_EUR ? ["EUR"] : []),
-    ...(process.env.XPAYMENTS_API_KEY_BRL ? ["BRL"] : []),
-  ];
+  const supportedCurrencies: PaymentCurrency[] = ["EUR", "BRL"];
+  const paymentCurrencies = supportedCurrencies.filter((currency) => xpaymentsCurrencyEnabled(currency));
   const webhookCurrencies = [
     ...(process.env.XPAYMENTS_WEBHOOK_SECRET_EUR ? ["EUR"] : []),
     ...(process.env.XPAYMENTS_WEBHOOK_SECRET_BRL ? ["BRL"] : []),

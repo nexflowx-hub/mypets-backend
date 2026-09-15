@@ -51,9 +51,20 @@ export function xpaymentsConfigForCurrency(currency: PaymentCurrency) {
   return { apiKey: apiKey?.trim() ?? "", storeCode: storeCode?.trim() ?? "" };
 }
 
+export function xpaymentsWebhookSecretForCurrency(currency: PaymentCurrency) {
+  return (currency === "EUR" ? process.env.XPAYMENTS_WEBHOOK_SECRET_EUR : process.env.XPAYMENTS_WEBHOOK_SECRET_BRL)?.trim() ?? "";
+}
+
 export function xpaymentsCurrencyEnabled(currency: PaymentCurrency) {
   const { apiKey, storeCode } = xpaymentsConfigForCurrency(currency);
-  return Boolean(apiKey && storeCode);
+  const webhookSecret = xpaymentsWebhookSecretForCurrency(currency);
+  if (!apiKey || !storeCode || !webhookSecret) return false;
+
+  if (process.env.PAYMENTS_LIVE === "true") {
+    return apiKey.startsWith("xp_live_") && storeCode === LIVE_STORE_CODES[currency];
+  }
+
+  return true;
 }
 
 export function xpaymentsNativeMethodsForCurrency(currency: PaymentCurrency): NativePaymentMethod[] {
@@ -75,6 +86,9 @@ function assertEnvironmentSafe(currency: PaymentCurrency, apiKey: string, storeC
   const expectedStore = LIVE_STORE_CODES[currency];
   if (storeCode !== expectedStore) {
     throw new Error(`XPAYMENTS live ${currency} checkout must be isolated to ${expectedStore}`);
+  }
+  if (!xpaymentsWebhookSecretForCurrency(currency)) {
+    throw new Error(`XPAYMENTS live ${currency} checkout requires webhook verification`);
   }
 }
 
