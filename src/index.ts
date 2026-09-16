@@ -18,7 +18,13 @@ import { registerCampaignAdminRoutes } from "./campaign-admin-routes.js";
 import { registerMediaRoutes } from "./media-routes.js";
 import { registerPaymentRoutes } from "./payment-routes.js";
 import { registerPaymentWebhookRoutes } from "./payment-webhook-routes.js";
-import { xpaymentsCurrencyEnabled, type PaymentCurrency } from "./payments/xpayments.js";
+import {
+  xpaymentsCurrencyEnabled,
+  xpaymentsFinalityModeForCurrency,
+  xpaymentsNativeMethodEnabled,
+  xpaymentsNativeMethodsForCurrency,
+  type PaymentCurrency,
+} from "./payments/xpayments.js";
 
 const prisma = new PrismaClient();
 const app = Fastify({ logger: true, trustProxy: true });
@@ -137,6 +143,18 @@ app.get("/v1/config", async () => {
     ...(process.env.XPAYMENTS_WEBHOOK_SECRET_EUR ? ["EUR"] : []),
     ...(process.env.XPAYMENTS_WEBHOOK_SECRET_BRL ? ["BRL"] : []),
   ];
+  const paymentFinalityModes = Object.fromEntries(
+    supportedCurrencies.map((currency) => [currency, xpaymentsFinalityModeForCurrency(currency)]),
+  );
+  const paymentNativeMethods = Object.fromEntries(
+    supportedCurrencies.map((currency) => [
+      currency,
+      xpaymentsNativeMethodsForCurrency(currency).filter((method) => xpaymentsNativeMethodEnabled(currency, method)),
+    ]),
+  );
+  const degradedPaymentCurrencies = paymentCurrencies.filter(
+    (currency) => xpaymentsFinalityModeForCurrency(currency) !== "webhook",
+  );
   const paymentsLive = process.env.PAYMENTS_LIVE === "true" && paymentProvider === "xpayments" && paymentCurrencies.length > 0;
 
   return {
@@ -147,6 +165,9 @@ app.get("/v1/config", async () => {
       paymentProvider: paymentsLive ? "xpayments" : null,
       paymentCurrencies,
       paymentWebhookCurrencies: webhookCurrencies,
+      paymentFinalityModes,
+      paymentNativeMethods,
+      degradedPaymentCurrencies,
       embeddedCheckout: paymentsLive,
       legacyStoryPaymentsLive: false,
       payoutsEnabled: process.env.PAYOUTS_ENABLED === "true",
