@@ -85,11 +85,6 @@ export function xpaymentsNativeMethodsForCurrency(currency: PaymentCurrency): Na
 }
 
 export function xpaymentsNativeMethodEnabled(currency: PaymentCurrency, method: NativePaymentMethod) {
-  // Native S2S payments do not have a merchant-side status lookup in the current
-  // contract. Without a signing secret they would remain locally pending after
-  // the payer completes the provider action, so keep Native disabled and force
-  // the hosted XPay session path until Merchant webhooks are available.
-  if (process.env.PAYMENTS_LIVE === "true" && !xpaymentsWebhookSecretForCurrency(currency)) return false;
   return xpaymentsNativeMethodsForCurrency(currency).includes(method);
 }
 
