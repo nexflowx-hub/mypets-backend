@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export type PaymentCurrency = "EUR" | "BRL";
 export type NativePaymentMethod = "pix" | "mb_way" | "multibanco" | "bizum";
+export type PaymentFinalityMode = "webhook" | "checkout_reconciliation" | "disabled";
 
 const checkoutCreateResponse = z.object({
   success: z.boolean().optional(),
@@ -55,16 +56,25 @@ export function xpaymentsWebhookSecretForCurrency(currency: PaymentCurrency) {
   return (currency === "EUR" ? process.env.XPAYMENTS_WEBHOOK_SECRET_EUR : process.env.XPAYMENTS_WEBHOOK_SECRET_BRL)?.trim() ?? "";
 }
 
+export function xpaymentsAllowWebhooklessLive() {
+  return process.env.XPAYMENTS_ALLOW_WEBHOOKLESS_LIVE === "true";
+}
+
+export function xpaymentsFinalityModeForCurrency(currency: PaymentCurrency): PaymentFinalityMode {
+  if (xpaymentsWebhookSecretForCurrency(currency)) return "webhook";
+  if (xpaymentsAllowWebhooklessLive()) return "checkout_reconciliation";
+  return "disabled";
+}
+
 export function xpaymentsCurrencyEnabled(currency: PaymentCurrency) {
   const { apiKey, storeCode } = xpaymentsConfigForCurrency(currency);
-  const webhookSecret = xpaymentsWebhookSecretForCurrency(currency);
-  if (!apiKey || !storeCode || !webhookSecret) return false;
+  if (!apiKey || !storeCode) return false;
 
   if (process.env.PAYMENTS_LIVE === "true") {
-    return apiKey.startsWith("xp_live_") && storeCode === LIVE_STORE_CODES[currency];
+    if (!apiKey.startsWith("xp_live_") || storeCode !== LIVE_STORE_CODES[currency]) return false;
   }
 
-  return true;
+  return xpaymentsFinalityModeForCurrency(currency) !== "disabled";
 }
 
 export function xpaymentsNativeMethodsForCurrency(currency: PaymentCurrency): NativePaymentMethod[] {
@@ -87,7 +97,7 @@ function assertEnvironmentSafe(currency: PaymentCurrency, apiKey: string, storeC
   if (storeCode !== expectedStore) {
     throw new Error(`XPAYMENTS live ${currency} checkout must be isolated to ${expectedStore}`);
   }
-  if (!xpaymentsWebhookSecretForCurrency(currency)) {
+  if (!xpaymentsWebhookSecretForCurrency(currency) && !xpaymentsAllowWebhooklessLive()) {
     throw new Error(`XPAYMENTS live ${currency} checkout requires webhook verification`);
   }
 }
