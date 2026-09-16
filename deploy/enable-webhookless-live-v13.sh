@@ -6,6 +6,7 @@ ENV_FILE="/srv/apps/mypets/env/api.env"
 COMPOSE_FILE="$APP_DIR/deploy/compose.yml"
 API_CONTAINER="mypets-api"
 BACKUP="${ENV_FILE}.pre-webhookless-live.$(date -u +%Y%m%dT%H%M%SZ)"
+ACTIVATION_STARTED=0
 
 log() { printf '\n[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
 fail() { echo "ERROR: $*" >&2; exit 1; }
@@ -30,18 +31,17 @@ set_env() {
   fi
 }
 
-rollback() {
+rollback_on_exit() {
   local code=$?
-  if [ "$code" -eq 0 ]; then return; fi
+  if [ "$code" -eq 0 ] || [ "$ACTIVATION_STARTED" -ne 1 ]; then return; fi
   echo "Activation failed; restoring previous api.env" >&2
   if [ -f "$BACKUP" ]; then
     cp "$BACKUP" "$ENV_FILE"
     chmod 600 "$ENV_FILE"
     docker compose -p mypets -f "$COMPOSE_FILE" up -d --force-recreate >/dev/null 2>&1 || true
   fi
-  exit "$code"
 }
-trap rollback ERR
+trap rollback_on_exit EXIT
 
 log "Validating dedicated LIVE Stores and keys"
 [ "$(value PAYMENT_PROVIDER)" = "xpayments" ] || fail "PAYMENT_PROVIDER must be xpayments"
@@ -62,6 +62,7 @@ printf 'XPAYMENTS_WEBHOOK_SECRET_EUR: %s\n' "$([ -n "$(value XPAYMENTS_WEBHOOK_S
 log "Backing up api.env and enabling explicit degraded LIVE mode"
 cp "$ENV_FILE" "$BACKUP"
 chmod 600 "$BACKUP"
+ACTIVATION_STARTED=1
 set_env XPAYMENTS_ALLOW_WEBHOOKLESS_LIVE true
 set_env PAYMENTS_LIVE true
 chmod 600 "$ENV_FILE"
@@ -96,7 +97,8 @@ jq -e '.data.paymentsLive == true and .data.paymentProvider == "xpayments"' /tmp
 jq -e '(.data.paymentCurrencies | index("BRL")) != null and (.data.paymentCurrencies | index("EUR")) != null' /tmp/mypets-live-config.json >/dev/null
 jq -e '(.data.degradedPaymentCurrencies | index("BRL")) != null and (.data.degradedPaymentCurrencies | index("EUR")) != null' /tmp/mypets-live-config.json >/dev/null
 
-trap - ERR
+ACTIVATION_STARTED=0
+trap - EXIT
 
 echo
 echo "============================================================"
