@@ -11,6 +11,7 @@ import { registerIdentityRoutes } from "./identity-routes.js";
 import { registerGrowthRoutes } from "./growth-routes.js";
 import { registerGrowthConversionRoutes } from "./growth-conversion-routes.js";
 import { registerCauseRoutes } from "./cause-routes.js";
+import { registerCauseIntakeRoutes } from "./cause-intake-routes.js";
 import { registerCauseCampaignRoutes } from "./cause-campaign-routes.js";
 import { registerSocialRoutes } from "./social-routes.js";
 import { registerAdminRoutes } from "./admin-routes.js";
@@ -174,6 +175,7 @@ app.get("/v1/config", async () => {
       authEnabled: Boolean(process.env.SUPABASE_URL && (process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY)),
       growthEnabled: true,
       causesEnabled: true,
+      causeIntakeEnabled: true,
       socialProfilesEnabled: true,
       discoveryEnabled: Boolean(process.env.DISCOVERY_INGEST_TOKEN),
       claimCenterEnabled: true,
@@ -290,6 +292,7 @@ await registerIdentityRoutes(app, prisma);
 await registerGrowthRoutes(app, prisma);
 await registerGrowthConversionRoutes(app, prisma);
 await registerCauseRoutes(app, prisma);
+await registerCauseIntakeRoutes(app, prisma);
 await registerCauseCampaignRoutes(app, prisma);
 await registerSocialRoutes(app, prisma);
 await registerAdminRoutes(app, prisma);
