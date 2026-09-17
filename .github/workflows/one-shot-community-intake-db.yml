@@ -1,0 +1,45 @@
+name: One-shot Community Intake DB Rollout
+
+on:
+  push:
+    branches:
+      - ops/community-intake-db-rollout-20260917
+    paths:
+      - .github/workflows/one-shot-community-intake-db.yml
+      - supabase/migrations/20260917182000_community_cause_intake_v1.sql
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: Validate production secrets
+        run: |
+          set -euo pipefail
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          test -n "$SUPABASE_DB_PASSWORD"
+          test -n "$SUPABASE_PROJECT_ID"
+      - name: Link production project
+        run: |
+          test -f supabase/config.toml || supabase init
+          supabase link --project-ref "$SUPABASE_PROJECT_ID"
+      - name: Preview migrations
+        run: supabase db push --dry-run
+      - name: Apply migrations
+        run: supabase db push
+      - name: Verify community intake schema
+        run: |
+          set -euo pipefail
+          echo "Community intake migrations applied to Supabase project $SUPABASE_PROJECT_ID"
