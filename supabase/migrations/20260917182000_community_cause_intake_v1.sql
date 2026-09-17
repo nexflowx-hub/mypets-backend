@@ -1,8 +1,6 @@
 -- MyPets Community Cause Intake V1
 -- Low-friction public presence is separated from verified financial fundraising.
 
--- Expand the canonical cause entity so a community-submitted cause can keep the
--- same public URL when it later becomes owner-linked and verified.
 alter table public.causes
   add column if not exists cause_type text,
   add column if not exists region text,
@@ -10,7 +8,6 @@ alter table public.causes
   add column if not exists fundraising_status text not null default 'DISABLED',
   add column if not exists intake_source text not null default 'PLATFORM';
 
--- Existing deployments may still have the original PT/BR-only country check.
 do $$
 declare c record;
 begin
@@ -26,10 +23,8 @@ begin
 end $$;
 
 alter table public.causes
-  add constraint causes_country_iso2_check
-  check (country ~ '^[A-Z]{2}$');
+  add constraint causes_country_iso2_check check (country ~ '^[A-Z]{2}$');
 
--- Rebuild beneficiary constraints to add a public, non-financial COMMUNITY lane.
 alter table public.causes drop constraint if exists causes_beneficiary_kind_check;
 alter table public.causes drop constraint if exists causes_beneficiary_binding_check;
 
@@ -47,7 +42,9 @@ alter table public.causes
   drop constraint if exists causes_verification_status_check,
   drop constraint if exists causes_fundraising_status_check,
   drop constraint if exists causes_intake_source_check,
-  drop constraint if exists causes_type_check;
+  drop constraint if exists causes_type_check,
+  drop constraint if exists causes_fundraising_gate_check,
+  drop constraint if exists causes_community_gate_check;
 
 alter table public.causes
   add constraint causes_verification_status_check
@@ -59,7 +56,6 @@ alter table public.causes
   add constraint causes_type_check
     check (cause_type is null or cause_type in ('VET_HELP','RESCUE','SHELTER','FEEDING','ADOPTION','EMERGENCY','NGO_PROJECT','OTHER'));
 
--- Preserve existing trusted/financial behaviour while making the new gate explicit.
 update public.causes
 set verification_status = case
       when beneficiary_kind = 'MYPETS' then 'PLATFORM'
@@ -72,12 +68,22 @@ set verification_status = case
     end
 where intake_source = 'PLATFORM';
 
+-- Hard database gates: an active financial cause must explicitly be enabled, and
+-- COMMUNITY records can never collect money until promoted to a verified owner.
+alter table public.causes
+  add constraint causes_fundraising_gate_check
+    check (status = 'DRAFT' or support_mode = 'NON_FINANCIAL' or fundraising_status = 'ENABLED'),
+  add constraint causes_community_gate_check
+    check (
+      beneficiary_kind <> 'COMMUNITY'
+      or (support_mode = 'NON_FINANCIAL' and fundraising_status = 'DISABLED' and currency is null and target_amount_cents is null)
+    );
+
 create index if not exists causes_verification_idx
   on public.causes(verification_status, fundraising_status, published_at desc);
 create index if not exists causes_type_location_idx
   on public.causes(cause_type, country, region, status);
 
--- Private intake record. Contact details are never part of the public causes API.
 create table if not exists public.cause_intake_submissions (
   id                       uuid primary key default gen_random_uuid(),
   cause_id                 uuid not null unique references public.causes(id) on delete cascade,
@@ -119,7 +125,6 @@ create index if not exists cause_intake_status_idx
 create index if not exists cause_intake_contact_idx
   on public.cause_intake_submissions(whatsapp, created_at desc);
 
--- Promotion is queued, never falsely presented as already posted.
 create table if not exists public.cause_promotion_queue (
   id                 uuid primary key default gen_random_uuid(),
   cause_id           uuid not null references public.causes(id) on delete cascade,
