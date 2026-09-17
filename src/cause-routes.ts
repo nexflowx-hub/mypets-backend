@@ -4,9 +4,8 @@ import type { PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { requireAuth } from "./auth.js";
 
-const countrySchema = z.enum(["PT", "BR"]);
+const countrySchema = z.string().trim().toUpperCase().regex(/^[A-Z]{2}$/);
 const supportModeSchema = z.enum(["FINANCIAL", "NON_FINANCIAL", "BOTH"]);
-const causeStatusSchema = z.enum(["DRAFT", "ACTIVE", "PAUSED", "FUNDED", "CLOSED"]);
 
 function slugify(value: string) {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 52) || "causa";
@@ -14,12 +13,13 @@ function slugify(value: string) {
 
 type CauseRow = {
   id: string;
-  protector_id: string;
+  protector_id: string | null;
   slug: string;
   title: string;
   summary: string | null;
   story: string | null;
   country: string;
+  region: string | null;
   city: string | null;
   primary_image: string | null;
   support_mode: string;
@@ -27,10 +27,21 @@ type CauseRow = {
   raised_amount_cents: number;
   currency: string | null;
   status: string;
+  beneficiary_kind: string;
+  cause_type: string | null;
+  verification_status: string;
+  fundraising_status: string;
+  intake_source: string;
   published_at: Date | null;
   created_at: Date;
   updated_at: Date;
 };
+
+const causeColumns = `
+  id, protector_id, slug, title, summary, story, country, region, city, primary_image, support_mode,
+  target_amount_cents, raised_amount_cents, currency, status, beneficiary_kind, cause_type,
+  verification_status, fundraising_status, intake_source, published_at, created_at, updated_at
+`;
 
 function publicCause(row: CauseRow) {
   return {
@@ -41,6 +52,7 @@ function publicCause(row: CauseRow) {
     summary: row.summary,
     story: row.story,
     country: row.country,
+    region: row.region,
     city: row.city,
     primaryImage: row.primary_image,
     supportMode: row.support_mode,
@@ -48,6 +60,11 @@ function publicCause(row: CauseRow) {
     raisedAmountCents: row.raised_amount_cents,
     currency: row.currency,
     status: row.status,
+    beneficiaryKind: row.beneficiary_kind,
+    causeType: row.cause_type,
+    verificationStatus: row.verification_status,
+    fundraisingStatus: row.fundraising_status,
+    intakeSource: row.intake_source,
     publishedAt: row.published_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -64,15 +81,17 @@ export async function registerCauseRoutes(app: FastifyInstance, prisma: PrismaCl
     if (!query.success) return reply.code(400).send({ error: { code: "INVALID_QUERY", message: "Invalid cause query" } });
     const rows = query.data.country
       ? await prisma.$queryRaw<CauseRow[]>`
-          select id, protector_id, slug, title, summary, story, country, city, primary_image, support_mode,
-                 target_amount_cents, raised_amount_cents, currency, status, published_at, created_at, updated_at
+          select id, protector_id, slug, title, summary, story, country, region, city, primary_image, support_mode,
+                 target_amount_cents, raised_amount_cents, currency, status, beneficiary_kind, cause_type,
+                 verification_status, fundraising_status, intake_source, published_at, created_at, updated_at
           from public.causes
           where status = 'ACTIVE' and is_public = true and country = ${query.data.country}
           order by published_at desc nulls last, created_at desc limit ${query.data.limit}
         `
       : await prisma.$queryRaw<CauseRow[]>`
-          select id, protector_id, slug, title, summary, story, country, city, primary_image, support_mode,
-                 target_amount_cents, raised_amount_cents, currency, status, published_at, created_at, updated_at
+          select id, protector_id, slug, title, summary, story, country, region, city, primary_image, support_mode,
+                 target_amount_cents, raised_amount_cents, currency, status, beneficiary_kind, cause_type,
+                 verification_status, fundraising_status, intake_source, published_at, created_at, updated_at
           from public.causes
           where status = 'ACTIVE' and is_public = true
           order by published_at desc nulls last, created_at desc limit ${query.data.limit}
@@ -84,15 +103,20 @@ export async function registerCauseRoutes(app: FastifyInstance, prisma: PrismaCl
     const params = z.object({ slug: z.string().trim().min(2).max(100) }).safeParse(req.params);
     if (!params.success) return reply.code(400).send({ error: { code: "INVALID_SLUG", message: "Invalid cause slug" } });
     const rows = await prisma.$queryRaw<CauseRow[]>`
-      select id, protector_id, slug, title, summary, story, country, city, primary_image, support_mode,
-             target_amount_cents, raised_amount_cents, currency, status, published_at, created_at, updated_at
+      select id, protector_id, slug, title, summary, story, country, region, city, primary_image, support_mode,
+             target_amount_cents, raised_amount_cents, currency, status, beneficiary_kind, cause_type,
+             verification_status, fundraising_status, intake_source, published_at, created_at, updated_at
       from public.causes where slug = ${params.data.slug} and status = 'ACTIVE' and is_public = true limit 1
     `;
     const cause = rows[0];
     if (!cause) return reply.code(404).send({ error: { code: "NOT_FOUND", message: "Cause not found" } });
 
-    const [protector, pets, needs, updates, counts] = await Promise.all([
-      prisma.protector.findUnique({ where: { id: cause.protector_id }, select: { id: true, slug: true, displayName: true, verification: true, city: true, country: true } }),
+    const protectorPromise = cause.protector_id
+      ? prisma.protector.findUnique({ where: { id: cause.protector_id }, select: { id: true, slug: true, displayName: true, verification: true, city: true, country: true } })
+      : Promise.resolve(null);
+
+    const [protector, pets, needs, updates, counts, communityRows] = await Promise.all([
+      protectorPromise,
       prisma.$queryRaw<Array<{ id: string; facepets_id: string; name: string; status: string; primary_image: string | null }>>`
         select p.id, p.facepets_id, p.name, p.status, p.primary_image
         from public.pets p join public.cause_pets cp on cp.pet_id = p.id
@@ -113,7 +137,29 @@ export async function registerCauseRoutes(app: FastifyInstance, prisma: PrismaCl
           (select count(*) from public.cause_followers where cause_id = ${cause.id}::uuid)::bigint as followers,
           (select count(*) from public.sponsorships where cause_id = ${cause.id}::uuid and status in ('INTERESTED','PENDING','ACTIVE'))::bigint as sponsors
       `,
+      cause.beneficiary_kind === "COMMUNITY"
+        ? prisma.$queryRaw<Array<{
+            instagram_url: string | null;
+            facebook_url: string | null;
+            tiktok_url: string | null;
+            public_whatsapp: boolean;
+            whatsapp: string;
+            media_links: unknown;
+          }>>`
+            select instagram_url, facebook_url, tiktok_url, public_whatsapp, whatsapp, media_links
+            from public.cause_intake_submissions where cause_id = ${cause.id}::uuid limit 1
+          `
+        : Promise.resolve([]),
     ]);
+
+    const community = communityRows[0];
+    const submittedSocialLinks = community
+      ? [
+          community.instagram_url ? { platform: "INSTAGRAM", url: community.instagram_url } : null,
+          community.facebook_url ? { platform: "FACEBOOK", url: community.facebook_url } : null,
+          community.tiktok_url ? { platform: "TIKTOK", url: community.tiktok_url } : null,
+        ].filter((item): item is { platform: string; url: string } => Boolean(item))
+      : [];
 
     return {
       data: {
@@ -124,6 +170,9 @@ export async function registerCauseRoutes(app: FastifyInstance, prisma: PrismaCl
         updates: updates.map((update) => ({ id: update.id, title: update.title, body: update.body, imageUrl: update.image_url, createdAt: update.created_at })),
         followers: Number(counts[0]?.followers ?? 0n),
         sponsors: Number(counts[0]?.sponsors ?? 0n),
+        submittedSocialLinks,
+        submittedMedia: Array.isArray(community?.media_links) ? community.media_links : [],
+        publicWhatsapp: community?.public_whatsapp ? community.whatsapp : null,
       },
     };
   });
@@ -166,17 +215,21 @@ export async function registerCauseRoutes(app: FastifyInstance, prisma: PrismaCl
     const id = crypto.randomUUID();
     const slug = `${slugify(parsed.data.title)}-${id.slice(0, 8)}`;
     const publishedAt = parsed.data.status === "ACTIVE" ? new Date() : null;
+    const fundraisingStatus = parsed.data.status === "ACTIVE" && parsed.data.supportMode !== "NON_FINANCIAL" ? "ENABLED" : "DISABLED";
     const rows = await prisma.$transaction(async (tx) => {
       const created = await tx.$queryRaw<CauseRow[]>`
         insert into public.causes (
           id, protector_id, slug, title, summary, story, country, city, primary_image, support_mode,
-          target_amount_cents, currency, status, is_public, published_at
+          target_amount_cents, currency, status, is_public, published_at,
+          beneficiary_kind, verification_status, fundraising_status, intake_source
         ) values (
           ${id}::uuid, ${protector.id}::uuid, ${slug}, ${parsed.data.title}, ${parsed.data.summary ?? null}, ${parsed.data.story ?? null},
           ${protector.country}, ${parsed.data.city ?? protector.city}, ${parsed.data.primaryImage ?? null}, ${parsed.data.supportMode},
-          ${parsed.data.targetAmountCents ?? null}, ${parsed.data.currency ?? null}, ${parsed.data.status}, true, ${publishedAt}
-        ) returning id, protector_id, slug, title, summary, story, country, city, primary_image, support_mode,
-                    target_amount_cents, raised_amount_cents, currency, status, published_at, created_at, updated_at
+          ${parsed.data.targetAmountCents ?? null}, ${parsed.data.currency ?? null}, ${parsed.data.status}, true, ${publishedAt},
+          'PROTECTOR', 'OWNER_LINKED', ${fundraisingStatus}, 'PLATFORM'
+        ) returning id, protector_id, slug, title, summary, story, country, region, city, primary_image, support_mode,
+                    target_amount_cents, raised_amount_cents, currency, status, beneficiary_kind, cause_type,
+                    verification_status, fundraising_status, intake_source, published_at, created_at, updated_at
       `;
       for (const petId of parsed.data.petIds) await tx.$executeRaw`insert into public.cause_pets (cause_id, pet_id) values (${id}::uuid, ${petId}::uuid) on conflict do nothing`;
       for (const needId of parsed.data.needIds) await tx.$executeRaw`insert into public.cause_needs (cause_id, need_id) values (${id}::uuid, ${needId}::uuid) on conflict do nothing`;
@@ -191,8 +244,9 @@ export async function registerCauseRoutes(app: FastifyInstance, prisma: PrismaCl
     const protector = await prisma.protector.findUnique({ where: { userId: user.id }, select: { id: true } });
     if (!protector) return { data: [] };
     const rows = await prisma.$queryRaw<CauseRow[]>`
-      select id, protector_id, slug, title, summary, story, country, city, primary_image, support_mode,
-             target_amount_cents, raised_amount_cents, currency, status, published_at, created_at, updated_at
+      select id, protector_id, slug, title, summary, story, country, region, city, primary_image, support_mode,
+             target_amount_cents, raised_amount_cents, currency, status, beneficiary_kind, cause_type,
+             verification_status, fundraising_status, intake_source, published_at, created_at, updated_at
       from public.causes where protector_id = ${protector.id}::uuid order by created_at desc limit 100
     `;
     return { data: rows.map(publicCause) };

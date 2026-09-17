@@ -11,6 +11,8 @@ import { registerIdentityRoutes } from "./identity-routes.js";
 import { registerGrowthRoutes } from "./growth-routes.js";
 import { registerGrowthConversionRoutes } from "./growth-conversion-routes.js";
 import { registerCauseRoutes } from "./cause-routes.js";
+import { registerCauseIntakeRoutes } from "./cause-intake-routes.js";
+import { registerCauseIntakeAdminRoutes } from "./cause-intake-admin-routes.js";
 import { registerCauseCampaignRoutes } from "./cause-campaign-routes.js";
 import { registerSocialRoutes } from "./social-routes.js";
 import { registerAdminRoutes } from "./admin-routes.js";
@@ -55,11 +57,7 @@ function tags(value: unknown): string[] {
 
 const publicDemoContent = process.env.PUBLIC_DEMO_CONTENT === "true";
 
-app.get("/", async () => ({
-  service: "mypets-api",
-  status: "ok",
-  version: process.env.APP_VERSION ?? "0.9.0",
-}));
+app.get("/", async () => ({ service: "mypets-api", status: "ok", version: process.env.APP_VERSION ?? "0.9.0" }));
 
 app.get("/health", async (_req, reply) => {
   try {
@@ -82,45 +80,18 @@ app.get("/v1/health", async (_req, reply) => {
 });
 
 app.get("/v1/stories", async () => {
-  let rows = await prisma.story.findMany({
-    where: { active: true, ...(publicDemoContent ? {} : { isDemo: false }) },
-    orderBy: { sortOrder: "asc" },
-    take: 50,
-  });
-
+  let rows = await prisma.story.findMany({ where: { active: true, ...(publicDemoContent ? {} : { isDemo: false }) }, orderBy: { sortOrder: "asc" }, take: 50 });
   let source: "live" | "mixed" | "demo_fallback" = publicDemoContent ? "mixed" : "live";
-
   if (!publicDemoContent && rows.length === 0) {
-    rows = await prisma.story.findMany({
-      where: { active: true, isDemo: true },
-      orderBy: { sortOrder: "asc" },
-      take: 12,
-    });
+    rows = await prisma.story.findMany({ where: { active: true, isDemo: true }, orderBy: { sortOrder: "asc" }, take: 12 });
     source = "demo_fallback";
   }
-
   return {
-    meta: {
-      source,
-      demoFallback: source === "demo_fallback",
-      count: rows.length,
-    },
+    meta: { source, demoFallback: source === "demo_fallback", count: rows.length },
     data: rows.map((story) => ({
-      id: story.id,
-      slug: story.slug,
-      kind: story.kind,
-      name: story.name,
-      location: story.location,
-      country: story.country,
-      currency: story.currency,
-      descPtPT: story.descPtPT,
-      descPtBR: story.descPtBR,
-      descEn: story.descEn,
-      image: story.image,
-      imageAlt: story.imageAlt,
-      tags: tags(story.tags),
-      targetCents: story.targetCents,
-      raisedCents: story.raisedCents,
+      id: story.id, slug: story.slug, kind: story.kind, name: story.name, location: story.location, country: story.country,
+      currency: story.currency, descPtPT: story.descPtPT, descPtBR: story.descPtBR, descEn: story.descEn, image: story.image,
+      imageAlt: story.imageAlt, tags: tags(story.tags), targetCents: story.targetCents, raisedCents: story.raisedCents,
       progress: story.targetCents > 0 ? Math.min(100, Math.round((story.raisedCents / story.targetCents) * 100)) : 0,
       isDemo: story.isDemo,
     })),
@@ -128,10 +99,7 @@ app.get("/v1/stories", async () => {
 });
 
 app.get("/v1/impact/public", async () => {
-  const rows = await prisma.impactMetric.findMany({
-    where: publicDemoContent ? {} : { isDemo: false },
-    orderBy: { sortOrder: "asc" },
-  });
+  const rows = await prisma.impactMetric.findMany({ where: publicDemoContent ? {} : { isDemo: false }, orderBy: { sortOrder: "asc" } });
   return { data: rows };
 });
 
@@ -143,18 +111,11 @@ app.get("/v1/config", async () => {
     ...(process.env.XPAYMENTS_WEBHOOK_SECRET_EUR ? ["EUR"] : []),
     ...(process.env.XPAYMENTS_WEBHOOK_SECRET_BRL ? ["BRL"] : []),
   ];
-  const paymentFinalityModes = Object.fromEntries(
-    supportedCurrencies.map((currency) => [currency, xpaymentsFinalityModeForCurrency(currency)]),
-  );
+  const paymentFinalityModes = Object.fromEntries(supportedCurrencies.map((currency) => [currency, xpaymentsFinalityModeForCurrency(currency)]));
   const paymentNativeMethods = Object.fromEntries(
-    supportedCurrencies.map((currency) => [
-      currency,
-      xpaymentsNativeMethodsForCurrency(currency).filter((method) => xpaymentsNativeMethodEnabled(currency, method)),
-    ]),
+    supportedCurrencies.map((currency) => [currency, xpaymentsNativeMethodsForCurrency(currency).filter((method) => xpaymentsNativeMethodEnabled(currency, method))]),
   );
-  const degradedPaymentCurrencies = paymentCurrencies.filter(
-    (currency) => xpaymentsFinalityModeForCurrency(currency) !== "webhook",
-  );
+  const degradedPaymentCurrencies = paymentCurrencies.filter((currency) => xpaymentsFinalityModeForCurrency(currency) !== "webhook");
   const paymentsLive = process.env.PAYMENTS_LIVE === "true" && paymentProvider === "xpayments" && paymentCurrencies.length > 0;
 
   return {
@@ -174,6 +135,7 @@ app.get("/v1/config", async () => {
       authEnabled: Boolean(process.env.SUPABASE_URL && (process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY)),
       growthEnabled: true,
       causesEnabled: true,
+      causeIntakeEnabled: true,
       socialProfilesEnabled: true,
       discoveryEnabled: Boolean(process.env.DISCOVERY_INGEST_TOKEN),
       claimCenterEnabled: true,
@@ -184,22 +146,15 @@ app.get("/v1/config", async () => {
   };
 });
 
-const newsletterSchema = z.object({
-  email: z.string().email(),
-  locale: z.enum(["pt-PT", "pt-BR", "en"]).default("pt-PT"),
-  consent: z.literal(true),
-});
-
+const newsletterSchema = z.object({ email: z.string().email(), locale: z.enum(["pt-PT", "pt-BR", "en"]).default("pt-PT"), consent: z.literal(true) });
 app.post("/v1/newsletter", async (req, reply) => {
   const parsed = newsletterSchema.safeParse(req.body);
   if (!parsed.success) return reply.code(400).send({ error: { code: "INVALID_INPUT", message: "Invalid newsletter request" } });
-
   const row = await prisma.newsletterSubscriber.upsert({
     where: { email: parsed.data.email.toLowerCase() },
     update: { locale: parsed.data.locale, consent: true },
     create: { email: parsed.data.email.toLowerCase(), locale: parsed.data.locale, consent: true },
   });
-
   return reply.code(201).send({ data: { id: row.id } });
 });
 
@@ -214,74 +169,39 @@ const contributionSchema = z.object({
 });
 
 app.post("/v1/contributions/intents", async (req, reply) => {
-  if (process.env.PAYMENTS_LIVE !== "true") {
-    return reply.code(409).send({ error: { code: "PAYMENTS_NOT_LIVE", message: "Online contributions are not active yet" } });
-  }
-
+  if (process.env.PAYMENTS_LIVE !== "true") return reply.code(409).send({ error: { code: "PAYMENTS_NOT_LIVE", message: "Online contributions are not active yet" } });
   const parsed = contributionSchema.safeParse(req.body);
   if (!parsed.success) return reply.code(400).send({ error: { code: "INVALID_INPUT", message: "Invalid contribution request" } });
-
   const story = parsed.data.storyId ? await prisma.story.findUnique({ where: { id: parsed.data.storyId } }) : null;
-  if (parsed.data.storyId && !story) {
-    return reply.code(404).send({ error: { code: "STORY_NOT_FOUND", message: "Story not found" } });
-  }
-
+  if (parsed.data.storyId && !story) return reply.code(404).send({ error: { code: "STORY_NOT_FOUND", message: "Story not found" } });
   const idempotencyKey = String(req.headers["idempotency-key"] ?? crypto.randomUUID());
   const targetLabel = story?.name ?? (parsed.data.targetType === "GUARDIANS" ? "MyPets Guardians" : "MyPets");
   const row = await prisma.contribution.upsert({
     where: { idempotencyKey },
     update: {},
     create: {
-      storyId: parsed.data.storyId ?? null,
-      targetType: parsed.data.targetType,
-      targetLabel,
-      amountCents: parsed.data.amountCents,
-      currency: parsed.data.currency,
-      frequency: parsed.data.frequency,
-      donorName: parsed.data.donorName ?? null,
-      donorEmail: parsed.data.donorEmail?.toLowerCase() ?? null,
-      provider: process.env.PAYMENT_PROVIDER ?? "mock",
-      status: "PENDING",
-      idempotencyKey,
-      isDemo: false,
+      storyId: parsed.data.storyId ?? null, targetType: parsed.data.targetType, targetLabel, amountCents: parsed.data.amountCents,
+      currency: parsed.data.currency, frequency: parsed.data.frequency, donorName: parsed.data.donorName ?? null,
+      donorEmail: parsed.data.donorEmail?.toLowerCase() ?? null, provider: process.env.PAYMENT_PROVIDER ?? "mock",
+      status: "PENDING", idempotencyKey, isDemo: false,
     },
   });
-
   return reply.code(201).send({ data: row });
 });
 
 app.post("/v1/contributions/:id/confirm", async (req, reply) => {
-  if (process.env.PAYMENTS_LIVE !== "true") {
-    return reply.code(409).send({ error: { code: "PAYMENTS_NOT_LIVE", message: "Online contributions are not active yet" } });
-  }
-
+  if (process.env.PAYMENTS_LIVE !== "true") return reply.code(409).send({ error: { code: "PAYMENTS_NOT_LIVE", message: "Online contributions are not active yet" } });
   const params = z.object({ id: z.string().uuid() }).safeParse(req.params);
   if (!params.success) return reply.code(400).send({ error: { code: "INVALID_ID", message: "Invalid contribution id" } });
-  if ((process.env.PAYMENT_PROVIDER ?? "mock") === "mock") {
-    return reply.code(409).send({ error: { code: "LIVE_PROVIDER_REQUIRED", message: "A live payment provider is required" } });
-  }
-
+  if ((process.env.PAYMENT_PROVIDER ?? "mock") === "mock") return reply.code(409).send({ error: { code: "LIVE_PROVIDER_REQUIRED", message: "A live payment provider is required" } });
   return reply.code(409).send({ error: { code: "WEBHOOK_CONFIRM_REQUIRED", message: "Payment confirmation is handled by the provider webhook" } });
 });
 
-const reportSchema = z.object({
-  reason: z.string().trim().min(3).max(500),
-  entityUrl: z.string().trim().max(500).nullable().optional(),
-  email: z.string().email().nullable().optional(),
-});
-
+const reportSchema = z.object({ reason: z.string().trim().min(3).max(500), entityUrl: z.string().trim().max(500).nullable().optional(), email: z.string().email().nullable().optional() });
 app.post("/v1/reports", async (req, reply) => {
   const parsed = reportSchema.safeParse(req.body);
   if (!parsed.success) return reply.code(400).send({ error: { code: "INVALID_INPUT", message: "Invalid report" } });
-
-  const row = await prisma.report.create({
-    data: {
-      reason: parsed.data.reason,
-      entityUrl: parsed.data.entityUrl ?? null,
-      email: parsed.data.email?.toLowerCase() ?? null,
-    },
-  });
-
+  const row = await prisma.report.create({ data: { reason: parsed.data.reason, entityUrl: parsed.data.entityUrl ?? null, email: parsed.data.email?.toLowerCase() ?? null } });
   return reply.code(201).send({ data: { id: row.id, status: row.status } });
 });
 
@@ -290,6 +210,8 @@ await registerIdentityRoutes(app, prisma);
 await registerGrowthRoutes(app, prisma);
 await registerGrowthConversionRoutes(app, prisma);
 await registerCauseRoutes(app, prisma);
+await registerCauseIntakeRoutes(app, prisma);
+await registerCauseIntakeAdminRoutes(app, prisma);
 await registerCauseCampaignRoutes(app, prisma);
 await registerSocialRoutes(app, prisma);
 await registerAdminRoutes(app, prisma);
