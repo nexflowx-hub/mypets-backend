@@ -42,7 +42,7 @@ jobs:
         with:
           node-version: 22
       - run: npm install
-      - run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Validate rollout shell syntax\n        run: bash -n deploy/internal-alerts-telegram-v16.sh\n      - run: sudo apt-get update && sudo apt-get install -y postgresql-client
       - name: Create Supabase Auth and Storage schema stubs
         run: |
           psql "$DIRECT_URL" -v ON_ERROR_STOP=1 <<'SQL'
