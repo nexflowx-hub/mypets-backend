@@ -79,13 +79,14 @@ revoke all privileges on table public.internal_alert_deliveries from anon, authe
 
 -- Server-side service_role may be used by internal tooling in Supabase.
 -- CI also validates migrations against plain PostgreSQL, where this role is absent.
-do $
+do $grant$
 begin
   if exists (select 1 from pg_roles where rolname = 'service_role') then
     grant select, insert, update, delete on table public.internal_alerts to service_role;
     grant select, insert, update, delete on table public.internal_alert_deliveries to service_role;
   end if;
-end $;
+end
+$grant$;
 
 comment on table public.internal_alerts is
   'MyPets internal operational event/ticket log. Not exposed to anon/authenticated roles.';
