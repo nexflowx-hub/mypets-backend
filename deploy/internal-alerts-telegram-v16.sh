@@ -66,7 +66,39 @@ curl -fsS https://api.mypets.lat/v1/config >/dev/null
 log "Checking alert runtime mode"
 if grep -q '^TELEGRAM_ALERT_ENABLED=true$' "$ENV_FILE"; then
   echo "TELEGRAM_ALERT_ENABLED=true"
-  grep -q '^TELEGRAM_ALERT_BOT_TOKEN=.$' "$ENV_FILE" && true || echo "Telegram bot token presence will be validated by the API runtime."
+  if grep -q '^TELEGRAM_ALERT_BOT_TOKEN=
+else
+  echo "Telegram delivery remains disabled. Internal event/ticket logging is active."
+fi
+
+log "Recent API alert dispatcher logs"
+docker logs --since 3m "$API_CONTAINER" 2>&1 | grep -E 'Telegram internal alert|mypets-api' | tail -20 || true
+
+echo
+echo "============================================================"
+echo "MyPets Internal Alerts + Telegram V1 is deployed."
+echo "Internal event/ticket logging is active."
+echo "Telegram delivery is controlled only by server-side env vars."
+echo "Payments and customer-facing flows do not depend on Telegram."
+echo "============================================================"
+ "$ENV_FILE" || grep -q '^TELEGRAM_ALERT_CHAT_ID=
+else
+  echo "Telegram delivery remains disabled. Internal event/ticket logging is active."
+fi
+
+log "Recent API alert dispatcher logs"
+docker logs --since 3m "$API_CONTAINER" 2>&1 | grep -E 'Telegram internal alert|mypets-api' | tail -20 || true
+
+echo
+echo "============================================================"
+echo "MyPets Internal Alerts + Telegram V1 is deployed."
+echo "Internal event/ticket logging is active."
+echo "Telegram delivery is controlled only by server-side env vars."
+echo "Payments and customer-facing flows do not depend on Telegram."
+echo "============================================================"
+ "$ENV_FILE"; then
+    echo "WARNING: Telegram is enabled but bot token/chat id appears empty."
+  fi
 else
   echo "Telegram delivery remains disabled. Internal event/ticket logging is active."
 fi
