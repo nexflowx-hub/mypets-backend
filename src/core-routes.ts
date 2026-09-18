@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { requireAuth, type AuthUser } from "./auth.js";
+import { emitInternalAlert } from "./internal-alerts.js";
 
 const countrySchema = z.enum(["PT", "BR"]);
 const localeSchema = z.enum(["pt-PT", "pt-BR", "en"]);
@@ -364,6 +365,35 @@ export async function registerCoreRoutes(app: FastifyInstance, prisma: PrismaCli
     }
 
     const need = await prisma.need.create({ data: { protectorId: protector.id, ...parsed.data } });
+
+    await emitInternalAlert(app, prisma, {
+      eventType: "NEED_CREATED",
+      category: "SUPPORT",
+      severity: "NOTICE",
+      title: `Novo pedido de apoio: ${need.title}`,
+      summary: [
+        `Protetor: ${protector.displayName}`,
+        `Tipo: ${need.type}`,
+        need.description ? need.description.slice(0, 700) : null,
+        need.targetAmountCents && need.currency
+          ? `Meta: ${need.currency} ${(need.targetAmountCents / 100).toFixed(2)}`
+          : "Apoio não financeiro / sem meta definida",
+      ].filter(Boolean).join("\n"),
+      entityType: "need",
+      entityId: need.id,
+      ticketStatus: "OPEN",
+      actionRequired: true,
+      dedupeKey: `need-created:${need.id}`,
+      metadata: {
+        protectorId: protector.id,
+        petId: need.petId,
+        supportMode: need.supportMode,
+        targetAmountCents: need.targetAmountCents,
+        currency: need.currency,
+        status: need.status,
+      },
+    });
+
     return reply.code(201).send({ data: publicNeed(need) });
   });
 
@@ -435,6 +465,28 @@ export async function registerCoreRoutes(app: FastifyInstance, prisma: PrismaCli
     if (!need) return reply.code(404).send({ error: { code: "NOT_FOUND", message: "Need not found" } });
 
     const offer = await prisma.supportOffer.create({ data: { needId: need.id, userId: user.id, ...parsed.data } });
+
+    await emitInternalAlert(app, prisma, {
+      eventType: "SUPPORT_OFFER_CREATED",
+      category: "MESSAGE",
+      severity: "NOTICE",
+      title: "Nova oferta/mensagem de apoio",
+      summary: [
+        `Tipo de apoio: ${offer.kind}`,
+        parsed.data.message ? parsed.data.message.slice(0, 900) : "Sem mensagem adicional.",
+      ].join("\n"),
+      entityType: "support_offer",
+      entityId: offer.id,
+      ticketStatus: "OPEN",
+      actionRequired: true,
+      dedupeKey: `support-offer:${offer.id}`,
+      metadata: {
+        needId: need.id,
+        userId: user.id,
+        kind: offer.kind,
+      },
+    });
+
     return reply.code(201).send({ data: offer });
   });
 }
