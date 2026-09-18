@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import type { PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { requireAuth } from "./auth.js";
+import { emitInternalAlert } from "./internal-alerts.js";
 
 const intentSchema = z.enum(["SUPPORT", "VOLUNTEER", "SPONSOR", "DONATE", "PROTECTOR", "ADOPT", "PROJECT", "FOUND_ANIMAL"]);
 const countrySchema = z.enum(["PT", "BR"]);
@@ -161,6 +162,33 @@ export async function registerGrowthRoutes(app: FastifyInstance, prisma: PrismaC
       insert into public.growth_events (campaign_id, lead_id, event_name, source, medium, campaign, content, landing_path, metadata)
       values (${campaignRow?.id ?? null}::uuid, ${lead.id}::uuid, 'LEAD_CREATED', ${source}, ${medium}, ${campaign}, ${content}, ${parsed.data.landingPath ?? null}, ${JSON.stringify({ intent: lead.intent, score: lead.score })}::jsonb)
     `;
+
+    await emitInternalAlert(app, prisma, {
+      eventType: "GROWTH_LEAD_CREATED",
+      category: "LEAD",
+      severity: "NOTICE",
+      title: `Novo lead MyPets: ${lead.intent}`,
+      summary: [
+        parsed.data.name ? `Nome: ${parsed.data.name}` : null,
+        [parsed.data.city, parsed.data.country].filter(Boolean).join(" · ") || null,
+        parsed.data.message ? `Mensagem: ${parsed.data.message.slice(0, 700)}` : null,
+        `Score: ${lead.score}/100`,
+      ].filter(Boolean).join("\n"),
+      entityType: "growth_lead",
+      entityId: lead.id,
+      ticketStatus: "OPEN",
+      actionRequired: true,
+      dedupeKey: `growth-lead:${lead.id}`,
+      metadata: {
+        intent: lead.intent,
+        score: lead.score,
+        campaign: campaign,
+        source,
+        medium,
+        city: parsed.data.city ?? null,
+        country: parsed.data.country ?? null,
+      },
+    });
 
     return reply.code(201).send({ data: lead });
   });

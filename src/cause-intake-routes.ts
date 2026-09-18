@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type { PrismaClient } from "@prisma/client";
 import { z } from "zod";
+import { emitInternalAlert } from "./internal-alerts.js";
 
 const causeTypeSchema = z.enum([
   "VET_HELP",
@@ -161,6 +162,35 @@ export async function registerCauseIntakeRoutes(app: FastifyInstance, prisma: Pr
           )
           on conflict (cause_id) do nothing
         `;
+      });
+
+      await emitInternalAlert(app, prisma, {
+        eventType: "CAUSE_INTAKE_CREATED",
+        category: "CAUSE",
+        severity: "NOTICE",
+        title: `Nova causa publicada: ${parsed.data.projectName}`,
+        summary: [
+          publicMessage,
+          [parsed.data.city, parsed.data.region, parsed.data.country].filter(Boolean).join(" · "),
+          `Tipo: ${parsed.data.causeType}`,
+        ].filter(Boolean).join("\n"),
+        entityType: "cause",
+        entityId: causeId,
+        publicUrl: `${publicSite}/causas/${slug}`,
+        adminUrl: `${publicSite}/admin/causas`,
+        ticketStatus: "OPEN",
+        actionRequired: true,
+        dedupeKey: `cause-intake:${intakeId}`,
+        metadata: {
+          intakeId,
+          causeType: parsed.data.causeType,
+          country: parsed.data.country,
+          region: parsed.data.region,
+          city: parsed.data.city ?? null,
+          verificationStatus: "UNVERIFIED",
+          fundraisingStatus: "DISABLED",
+          promotionStatus: "QUEUED",
+        },
       });
 
       return reply.code(201).send({
