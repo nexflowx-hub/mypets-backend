@@ -3,6 +3,7 @@ import { Transform } from "node:stream";
 import type { FastifyInstance, FastifyReply, FastifyRequest, RouteShorthandOptions } from "fastify";
 import type { PrismaClient } from "@prisma/client";
 import { z } from "zod";
+import { emitInternalAlert } from "./internal-alerts.js";
 
 const webhookSchema = z.object({
   event: z.string().min(1).max(160),
@@ -193,8 +194,9 @@ function webhookHandler(app: FastifyInstance, prisma: PrismaClient, mode: Webhoo
 
     const nextStatus = normalizeStatus(parsed.data.status, parsed.data.event);
     try {
+      let newlySucceeded: IntentRow | null = null;
       if (nextStatus === "SUCCEEDED") {
-        await markSucceeded(prisma, intent);
+        newlySucceeded = await markSucceeded(prisma, intent);
       } else if (intent.status !== "SUCCEEDED") {
         await prisma.$executeRaw`
           update public.payment_intents
@@ -208,6 +210,33 @@ function webhookHandler(app: FastifyInstance, prisma: PrismaClient, mode: Webhoo
         set processing_status = 'PROCESSED', processed_at = now(), processing_error = null
         where provider = 'XPAYMENTS' and provider_event_id = ${providerEventId}
       `;
+
+      if (newlySucceeded) {
+        await emitInternalAlert(app, prisma, {
+          eventType: "PAYMENT_SUCCEEDED",
+          category: "PAYMENT",
+          severity: "NOTICE",
+          title: `Apoio confirmado: ${newlySucceeded.currency} ${(newlySucceeded.amount_cents / 100).toFixed(2)}`,
+          summary: [
+            `Método: ${newlySucceeded.payment_method ?? parsed.data.method ?? "não informado"}`,
+            newlySucceeded.cause_id ? `Causa: ${newlySucceeded.cause_id}` : "Destino: MyPets",
+            `Referência: ${newlySucceeded.provider_reference}`,
+          ].join("\n"),
+          entityType: "payment_intent",
+          entityId: newlySucceeded.id,
+          ticketStatus: "LOGGED",
+          actionRequired: false,
+          dedupeKey: `payment-succeeded:${newlySucceeded.id}`,
+          metadata: {
+            causeId: newlySucceeded.cause_id,
+            amountCents: newlySucceeded.amount_cents,
+            currency: newlySucceeded.currency,
+            paymentMethod: newlySucceeded.payment_method ?? parsed.data.method ?? null,
+            providerTransactionId: parsed.data.transaction_id,
+            providerReference: newlySucceeded.provider_reference,
+          },
+        });
+      }
 
       return reply.code(200).send({ received: true, intentId: intent.id, status: nextStatus });
     } catch (error) {
