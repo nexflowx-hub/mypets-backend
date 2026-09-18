@@ -13,6 +13,8 @@ import { registerGrowthConversionRoutes } from "./growth-conversion-routes.js";
 import { registerCauseRoutes } from "./cause-routes.js";
 import { registerCauseIntakeRoutes } from "./cause-intake-routes.js";
 import { registerCauseIntakeAdminRoutes } from "./cause-intake-admin-routes.js";
+import { registerInternalAlertAdminRoutes } from "./internal-alert-admin-routes.js";
+import { emitInternalAlert, startInternalAlertDispatcher } from "./internal-alerts.js";
 import { registerCauseCampaignRoutes } from "./cause-campaign-routes.js";
 import { registerSocialRoutes } from "./social-routes.js";
 import { registerAdminRoutes } from "./admin-routes.js";
@@ -202,6 +204,26 @@ app.post("/v1/reports", async (req, reply) => {
   const parsed = reportSchema.safeParse(req.body);
   if (!parsed.success) return reply.code(400).send({ error: { code: "INVALID_INPUT", message: "Invalid report" } });
   const row = await prisma.report.create({ data: { reason: parsed.data.reason, entityUrl: parsed.data.entityUrl ?? null, email: parsed.data.email?.toLowerCase() ?? null } });
+
+  await emitInternalAlert(app, prisma, {
+    eventType: "REPORT_CREATED",
+    category: "REPORT",
+    severity: "WARNING",
+    title: "Novo reporte recebido",
+    summary: [
+      parsed.data.reason,
+      parsed.data.entityUrl ? `URL reportada: ${parsed.data.entityUrl}` : null,
+    ].filter(Boolean).join("\n"),
+    entityType: "report",
+    entityId: row.id,
+    ticketStatus: "OPEN",
+    actionRequired: true,
+    dedupeKey: `report:${row.id}`,
+    metadata: {
+      entityUrl: parsed.data.entityUrl ?? null,
+    },
+  });
+
   return reply.code(201).send({ data: { id: row.id, status: row.status } });
 });
 
@@ -212,6 +234,7 @@ await registerGrowthConversionRoutes(app, prisma);
 await registerCauseRoutes(app, prisma);
 await registerCauseIntakeRoutes(app, prisma);
 await registerCauseIntakeAdminRoutes(app, prisma);
+await registerInternalAlertAdminRoutes(app, prisma);
 await registerCauseCampaignRoutes(app, prisma);
 await registerSocialRoutes(app, prisma);
 await registerAdminRoutes(app, prisma);
@@ -219,6 +242,8 @@ await registerCampaignAdminRoutes(app, prisma);
 await registerMediaRoutes(app, prisma);
 await registerPaymentRoutes(app, prisma);
 await registerPaymentWebhookRoutes(app, prisma);
+
+startInternalAlertDispatcher(app, prisma);
 
 app.setErrorHandler((error, _req, reply) => {
   app.log.error(error);
