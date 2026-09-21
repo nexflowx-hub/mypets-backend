@@ -52,6 +52,8 @@ select case
    and currency = 'BRL'
    and vertical = 'FOOD'
    and status = 'ACTIVE'
+   and verification_status = 'PLATFORM'
+   and fundraising_status = 'ENABLED'
   then 'twf_fund_ok'
   else 'twf_fund_invalid'
 end
