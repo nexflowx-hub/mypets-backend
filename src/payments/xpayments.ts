@@ -285,8 +285,8 @@ export async function getXPaymentsSession(sessionId: string, currency?: PaymentC
 export function normalizeXPaymentsStatus(value: unknown) {
   const status = String(value ?? "").trim().toLowerCase();
   if (!status) return null;
-  if (["paid", "succeeded", "success", "completed"].includes(status)) return "SUCCEEDED" as const;
-  if (["processing", "requires_action", "awaiting", "pending_action"].includes(status)) return "PROCESSING" as const;
+  if (["paid", "approved", "captured", "succeeded", "success", "completed"].includes(status)) return "SUCCEEDED" as const;
+  if (["processing", "authorized", "requires_action", "awaiting", "pending_action"].includes(status)) return "PROCESSING" as const;
   if (["failed", "declined", "error"].includes(status)) return "FAILED" as const;
   if (["cancelled", "canceled"].includes(status)) return "CANCELLED" as const;
   if (["expired"].includes(status)) return "EXPIRED" as const;
