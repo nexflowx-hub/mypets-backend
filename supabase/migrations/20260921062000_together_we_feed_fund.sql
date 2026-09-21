@@ -5,7 +5,8 @@ insert into public.causes (
   id, protector_id, slug, title, summary, story, country, city, primary_image,
   support_mode, target_amount_cents, raised_amount_cents, currency, status,
   is_public, published_at, vertical, campaign_key, campaign_meta,
-  beneficiary_kind, fund_code, is_evergreen
+  beneficiary_kind, fund_code, is_evergreen,
+  cause_type, verification_status, fundraising_status, intake_source
 ) values (
   '9a7f1000-0000-4a11-8c01-000000000006'::uuid,
   null,
@@ -28,7 +29,11 @@ insert into public.causes (
   '{"beneficiaryLabel":"MyPets · Together We Feed","trustNote":"Cobrança recebida pelo MyPets e contabilmente destinada à frente Together We Feed."}'::jsonb,
   'MYPETS',
   'TOGETHER_WE_FEED',
-  true
+  true,
+  'FEEDING',
+  'PLATFORM',
+  'ENABLED',
+  'PLATFORM'
 )
 on conflict (id) do update set
   slug = excluded.slug,
@@ -45,4 +50,8 @@ on conflict (id) do update set
   beneficiary_kind = excluded.beneficiary_kind,
   fund_code = excluded.fund_code,
   is_evergreen = excluded.is_evergreen,
+  cause_type = excluded.cause_type,
+  verification_status = excluded.verification_status,
+  fundraising_status = excluded.fundraising_status,
+  intake_source = excluded.intake_source,
   updated_at = now();
