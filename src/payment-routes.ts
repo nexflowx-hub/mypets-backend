@@ -8,6 +8,7 @@ import {
   createXPaymentsNativePayment,
   createXPaymentsSession,
   getXPaymentsSession,
+  getXPaymentsNativeTransaction,
   normalizeXPaymentsStatus,
   xpaymentsCurrencyEnabled,
   xpaymentsNativeMethodEnabled,
@@ -424,6 +425,29 @@ export async function registerPaymentRoutes(app: FastifyInstance, prisma: Prisma
         }
       } catch (error) {
         app.log.warn({ err: error, intentId: intent.id }, "XPAYMENTS status reconciliation unavailable");
+      }
+    }
+
+    if (intent.provider_transaction_id && ["PENDING", "PROCESSING"].includes(intent.status)) {
+      try {
+        const transaction = await getXPaymentsNativeTransaction(intent.provider_transaction_id, intent.currency);
+        const providerStatus = normalizeXPaymentsStatus(transaction.status);
+        if (providerStatus && providerStatus !== intent.status) {
+          if (providerStatus === "SUCCEEDED") {
+            const updated = await markSucceeded(prisma, intent);
+            if (updated) intent = updated;
+          } else {
+            const updated = await prisma.$queryRaw<IntentRow[]>`
+              update public.payment_intents set status = ${providerStatus}, updated_at = now()
+              where id = ${intent.id}::uuid and status <> 'SUCCEEDED'
+              returning id, cause_id, provider_session_id, provider_transaction_id, provider_reference, payment_method,
+                        amount_cents, currency, status, checkout_url, metadata, created_at, updated_at
+            `;
+            if (updated[0]) intent = updated[0];
+          }
+        }
+      } catch (error) {
+        app.log.warn({ err: error, intentId: intent.id, providerTransactionId: intent.provider_transaction_id }, "XPAYMENTS Native status reconciliation unavailable");
       }
     }
 
