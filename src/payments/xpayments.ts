@@ -28,6 +28,18 @@ const checkoutSessionResponse = z.object({
   data: z.record(z.string(), z.unknown()),
 });
 
+const nativeTransactionStatusResponse = z.object({
+  success: z.boolean().optional(),
+  data: z.object({
+    transactionId: z.string().uuid(),
+    reference: z.string().min(1).max(240),
+    status: z.string().min(1).max(80),
+    method: z.string().nullable().optional(),
+    currency: z.string().length(3),
+    storeCode: z.string().trim().min(2).max(120),
+  }).passthrough(),
+});
+
 const LIVE_STORE_CODES: Record<PaymentCurrency, string> = {
   EUR: "MYPETS-EUR",
   BRL: "MYPETS-BRL",
@@ -223,6 +235,25 @@ export async function createXPaymentsNativePayment(input: {
     action: parsed.data.action ?? {},
     storeCode,
   };
+}
+
+export async function getXPaymentsNativeTransaction(transactionId: string, currency: PaymentCurrency) {
+  const { apiKey, storeCode } = xpaymentsConfigForCurrency(currency);
+  if (!apiKey || !storeCode) throw new Error(`XPAYMENTS ${currency} Store is not configured`);
+  assertEnvironmentSafe(currency, apiKey, storeCode);
+
+  const response = await fetch(`${apiBase()}/payments/transactions/${encodeURIComponent(transactionId)}`, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+    signal: AbortSignal.timeout(8_000),
+    cache: "no-store",
+  });
+
+  if (!response.ok) throw new Error(`XPAYMENTS transaction lookup failed (${response.status})`);
+  const parsed = nativeTransactionStatusResponse.safeParse(await responsePayload(response));
+  if (!parsed.success || parsed.data.success === false) throw new Error("XPAYMENTS returned an invalid Native transaction status");
+  if (parsed.data.data.storeCode !== storeCode) throw new Error(`XPAYMENTS Store mismatch: expected ${storeCode}`);
+  if (parsed.data.data.currency.toUpperCase() !== currency) throw new Error(`XPAYMENTS currency mismatch: expected ${currency}`);
+  return parsed.data.data;
 }
 
 export async function getXPaymentsSession(sessionId: string, currency?: PaymentCurrency) {
