@@ -90,6 +90,77 @@ function verificationWhatsapp(slug: string) {
 
 export async function registerCauseIntakeRoutes(app: FastifyInstance, prisma: PrismaClient) {
   app.post(
+    "/v1/cause-intake/readiness",
+    { config: { rateLimit: { max: 2, timeWindow: "10 minutes" } } },
+    async (_req, reply) => {
+      const causeId = crypto.randomUUID();
+      const intakeId = crypto.randomUUID();
+      const rollbackMarker = "__CAUSE_INTAKE_READINESS_ROLLBACK__";
+
+      try {
+        await prisma.$transaction(async (tx) => {
+          await tx.$executeRaw`
+            insert into public.causes (
+              id, protector_id, slug, title, summary, story, country, region, city, primary_image,
+              support_mode, target_amount_cents, currency, status, is_public, published_at,
+              beneficiary_kind, cause_type, verification_status, fundraising_status, intake_source
+            ) values (
+              ${causeId}::uuid, null, ${`smoke-${causeId.slice(0, 8)}`}, 'MyPets intake readiness',
+              'Synthetic rollback-only cause intake readiness probe.',
+              'This row exists only inside a transaction that is intentionally rolled back.',
+              'BR', 'GO', null, null,
+              'NON_FINANCIAL', null, null, 'ACTIVE', false, null,
+              'COMMUNITY', 'NGO_PROJECT', 'UNVERIFIED', 'DISABLED', 'SELF_SERVICE'
+            )
+          `;
+
+          await tx.$executeRaw`
+            insert into public.cause_intake_submissions (
+              id, cause_id, contact_name, contact_email, whatsapp, public_whatsapp,
+              country, region, city, cause_type, instagram_url, facebook_url, tiktok_url, media_links,
+              source, medium, campaign, content, landing_path,
+              contact_consent, publication_consent, accuracy_confirmed, marketing_consent
+            ) values (
+              ${intakeId}::uuid, ${causeId}::uuid, 'MyPets Smoke', 'smoke@mypets.invalid', '+5500000000000', false,
+              'BR', 'GO', null, 'NGO_PROJECT', null, null, null, '[]'::jsonb,
+              'github-actions', 'production-smoke', 'cause-intake-readiness', 'rollback-probe', '/internal/readiness',
+              true, true, true, false
+            )
+          `;
+
+          await tx.$executeRaw`
+            insert into public.cause_promotion_queue (cause_id, suggested_caption, metadata)
+            values (
+              ${causeId}::uuid,
+              'Synthetic readiness probe',
+              '{"synthetic":true,"rollback":true}'::jsonb
+            )
+          `;
+
+          throw new Error(rollbackMarker);
+        });
+      } catch (error) {
+        if (error instanceof Error && error.message === rollbackMarker) {
+          return {
+            data: {
+              status: "ready",
+              databaseRoundTrip: true,
+              rolledBack: true,
+              checks: ["causes", "cause_intake_submissions", "cause_promotion_queue"],
+            },
+          };
+        }
+        app.log.error({ err: error }, "Cause intake readiness failed");
+        return reply.code(503).send({
+          error: { code: "CAUSE_INTAKE_NOT_READY", message: "Cause intake database path is not ready." },
+        });
+      }
+
+      return reply.code(500).send({ error: { code: "READINESS_ROLLBACK_FAILED", message: "Readiness rollback did not execute." } });
+    },
+  );
+
+  app.post(
     "/v1/cause-intake",
     { config: { rateLimit: { max: 4, timeWindow: "10 minutes" } } },
     async (req, reply) => {
