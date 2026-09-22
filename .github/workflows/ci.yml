@@ -116,4 +116,51 @@ jobs:
           residue="$(psql "$DIRECT_URL" -Atc "select count(*) from public.causes where slug like 'smoke-%'")"
           [ "$residue" = "0" ] || { echo "Readiness probe left database residue: $residue" >&2; exit 1; }
           echo "Cause intake DB round-trip validated with rollback"
+
+          cat >/tmp/intake.json <<'JSON'
+          {
+            "projectName": "CI Projeto Comunitário Animal",
+            "contactName": "Responsável CI",
+            "contactEmail": "ci-intake@example.com",
+            "whatsapp": "+5562999999999",
+            "publicWhatsapp": false,
+            "country": "BR",
+            "region": "GO",
+            "city": "Goiania",
+            "causeType": "NGO_PROJECT",
+            "details": "Projeto sintético criado exclusivamente pelo CI para validar o funil completo de captação de projetos do MyPets.",
+            "publicMessage": "Validação automática do funil público de projetos MyPets.",
+            "instagramUrl": null,
+            "facebookUrl": null,
+            "tiktokUrl": null,
+            "primaryImageUrl": null,
+            "mediaLinks": [],
+            "source": "github-actions",
+            "medium": "ci",
+            "campaign": "project-intake-e2e",
+            "content": "real-public-route",
+            "landingPath": "/projetos/apresentar?utm_source=github-actions",
+            "contactConsent": true,
+            "publicationConsent": true,
+            "accuracyConfirmed": true,
+            "marketingConsent": false,
+            "website": ""
+          }
+          JSON
+
+          curl -fsS -X POST --max-time 10 \
+            -H 'Content-Type: application/json' \
+            --data-binary @/tmp/intake.json \
+            http://127.0.0.1:8081/v1/cause-intake | tee /tmp/intake-result.json
+
+          jq -e '.data.id and .data.causeId and .data.slug and .data.verificationStatus == "UNVERIFIED" and .data.fundraisingStatus == "DISABLED" and .data.promotionStatus == "QUEUED"' /tmp/intake-result.json >/dev/null
+          INTAKE_ID="$(jq -r '.data.id' /tmp/intake-result.json)"
+          CAUSE_ID="$(jq -r '.data.causeId' /tmp/intake-result.json)"
+
+          curl -fsS --max-time 10 "http://127.0.0.1:8081/v1/cause-intake/$INTAKE_ID/public-status" | tee /tmp/intake-status.json
+          jq -e --arg id "$INTAKE_ID" --arg cause "$CAUSE_ID" '.data.id == $id and .data.causeId == $cause and .data.verificationStatus == "UNVERIFIED" and .data.fundraisingStatus == "DISABLED" and .data.promotionStatus == "QUEUED"' /tmp/intake-status.json >/dev/null
+
+          DB_STATE="$(psql "$DIRECT_URL" -At -F '|' -c "select c.beneficiary_kind, c.verification_status, c.fundraising_status, ci.status, pq.status from public.causes c join public.cause_intake_submissions ci on ci.cause_id=c.id join public.cause_promotion_queue pq on pq.cause_id=c.id where c.id='$CAUSE_ID'::uuid")"
+          [ "$DB_STATE" = "COMMUNITY|UNVERIFIED|DISABLED|PUBLISHED_UNVERIFIED|QUEUED" ] || { echo "Unexpected intake DB state: $DB_STATE" >&2; exit 1; }
+          echo "Real public cause-intake route validated end-to-end"
       - run: docker build -t mypets-backend:ci .
