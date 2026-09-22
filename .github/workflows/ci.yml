@@ -92,4 +92,28 @@ jobs:
       - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/seed.sql
       - run: npm run typecheck
       - run: npm run build
+      - name: Exercise cause intake database round-trip
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm start > /tmp/mypets-api.log 2>&1 &
+          API_PID=$!
+          trap 'kill "$API_PID" 2>/dev/null || true; cat /tmp/mypets-api.log || true' EXIT
+
+          ready=false
+          for attempt in $(seq 1 20); do
+            if curl -fsS --max-time 5 http://127.0.0.1:8081/health >/tmp/health.json; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          [ "$ready" = "true" ] || { echo "API did not become ready" >&2; exit 1; }
+
+          curl -fsS -X POST --max-time 10 http://127.0.0.1:8081/v1/cause-intake/readiness | tee /tmp/intake-readiness.json
+          jq -e '.data.status == "ready" and .data.databaseRoundTrip == true and .data.rolledBack == true' /tmp/intake-readiness.json >/dev/null
+
+          residue="$(psql "$DIRECT_URL" -Atc "select count(*) from public.causes where slug like 'smoke-%'")"
+          [ "$residue" = "0" ] || { echo "Readiness probe left database residue: $residue" >&2; exit 1; }
+          echo "Cause intake DB round-trip validated with rollback"
       - run: docker build -t mypets-backend:ci .
