@@ -58,6 +58,7 @@ const trackingFields = {
   campaign: z.string().trim().max(180).nullable().optional(),
   content: z.string().trim().max(180).nullable().optional(),
   refCode: z.string().trim().max(120).nullable().optional(),
+  landingPath: z.string().trim().max(500).nullable().optional(),
 };
 
 const checkoutSchema = z.object({
@@ -217,6 +218,7 @@ function baseMetadata(input: {
   campaign?: string | null;
   content?: string | null;
   refCode?: string | null;
+  landingPath?: string | null;
 }) {
   return {
     mypetsIntentId: input.intentId,
@@ -230,6 +232,7 @@ function baseMetadata(input: {
     campaign: input.campaign ?? null,
     content: input.content ?? null,
     refCode: input.refCode ?? null,
+    landingPath: input.landingPath ?? null,
     returnUrl: `${process.env.PUBLIC_SITE_URL ?? "https://mypets.lat"}/causas/${input.cause.slug}`,
   };
 }
