@@ -212,6 +212,7 @@ function campaignAmountError(cause: CausePaymentRow, amountCents: number, reward
     cause.fund_code !== "EBOOK_RACAO" ||
     uniqueKeys.length < 1 ||
     uniqueKeys.length > 5 ||
+    uniqueKeys.length !== keys.length ||
     uniqueKeys.some((key) => !EBOOK_REWARD_KEYS.has(key))
   ) {
     return {
@@ -501,24 +502,191 @@ export async function registerPaymentRoutes(app: FastifyInstance, prisma: Prisma
       select
         coalesce(sum(
           case
+            when coalesce(metadata->>'foodKg', '') ~ '^[0-9]+
+      from public.payment_intents
+      where cause_id = ${EBOOK_RACAO_CAUSE_ID}::uuid
+        and status = 'SUCCEEDED'
+    `;
+    const row = rows[0] ?? {
+      confirmed_kg: 0,
+      confirmed_contributions: 0,
+      total_received_cents: 0n,
+      extra_support_cents: 0n,
+    };
+    const goalKg = 100;
+    return {
+      data: {
+        confirmedKg: row.confirmed_kg,
+        confirmedContributions: row.confirmed_contributions,
+        totalReceivedCents: Number(row.total_received_cents),
+        extraSupportCents: Number(row.extra_support_cents),
+        goalKg,
+        progressPercent: Math.min(100, Math.round((row.confirmed_kg / goalKg) * 100)),
+      },
+    };
+  });
+
+  app.get("/v1/payments/:id", async (req, reply) => {
+    const params = z.object({ id: z.string().uuid() }).safeParse(req.params);
+    if (!params.success) return reply.code(400).send({ error: { code: "INVALID_ID", message: "Invalid payment intent id" } });
+
+    const rows = await prisma.$queryRaw<IntentRow[]>`
+      select id, cause_id, provider_session_id, provider_transaction_id, provider_reference, payment_method,
+             amount_cents, currency, status, checkout_url, metadata, created_at, updated_at
+      from public.payment_intents where id = ${params.data.id}::uuid limit 1
+    `;
+    let intent = rows[0];
+    if (!intent) return reply.code(404).send({ error: { code: "NOT_FOUND", message: "Payment intent not found" } });
+
+    if (intent.provider_session_id && ["PENDING", "PROCESSING"].includes(intent.status)) {
+      try {
+        const session = await getXPaymentsSession(intent.provider_session_id, intent.currency);
+        const providerStatus = normalizeXPaymentsStatus(session.status ?? (session.metadata as Record<string, unknown> | undefined)?.checkoutStatus);
+        if (providerStatus && providerStatus !== intent.status) {
+          if (providerStatus === "SUCCEEDED") {
+            const updated = await markSucceeded(prisma, intent);
+            if (updated) intent = updated;
+          } else {
+            const updated = await prisma.$queryRaw<IntentRow[]>`
+              update public.payment_intents set status = ${providerStatus}, updated_at = now()
+              where id = ${intent.id}::uuid and status <> 'SUCCEEDED'
+              returning id, cause_id, provider_session_id, provider_transaction_id, provider_reference, payment_method,
+                        amount_cents, currency, status, checkout_url, metadata, created_at, updated_at
+            `;
+            if (updated[0]) intent = updated[0];
+          }
+        }
+      } catch (error) {
+        app.log.warn({ err: error, intentId: intent.id }, "XPAYMENTS status reconciliation unavailable");
+      }
+    }
+
+    if (intent.provider_transaction_id && ["PENDING", "PROCESSING"].includes(intent.status)) {
+      try {
+        const transaction = await getXPaymentsNativeTransaction(intent.provider_transaction_id, intent.currency);
+        const providerStatus = normalizeXPaymentsStatus(transaction.status);
+        if (providerStatus && providerStatus !== intent.status) {
+          if (providerStatus === "SUCCEEDED") {
+            const updated = await markSucceeded(prisma, intent);
+            if (updated) intent = updated;
+          } else {
+            const updated = await prisma.$queryRaw<IntentRow[]>`
+              update public.payment_intents set status = ${providerStatus}, updated_at = now()
+              where id = ${intent.id}::uuid and status <> 'SUCCEEDED'
+              returning id, cause_id, provider_session_id, provider_transaction_id, provider_reference, payment_method,
+                        amount_cents, currency, status, checkout_url, metadata, created_at, updated_at
+            `;
+            if (updated[0]) intent = updated[0];
+          }
+        }
+      } catch (error) {
+        app.log.warn({ err: error, intentId: intent.id, providerTransactionId: intent.provider_transaction_id }, "XPAYMENTS Native status reconciliation unavailable");
+      }
+    }
+
+    return { data: publicIntent(intent) };
+  });
+}
+
+              then (metadata->>'foodKg')::int
             when jsonb_typeof(metadata->'rewardKeys') = 'array'
               then jsonb_array_length(metadata->'rewardKeys')
-            else floor(amount_cents / 1290.0)::int
+            else 0
           end
         ), 0)::int as confirmed_kg,
         count(*)::int as confirmed_contributions,
         coalesce(sum(amount_cents), 0)::bigint as total_received_cents,
         coalesce(sum(
-          greatest(
-            amount_cents - (
-              case
-                when jsonb_typeof(metadata->'rewardKeys') = 'array'
-                  then jsonb_array_length(metadata->'rewardKeys') * 1290
-                else floor(amount_cents / 1290.0)::int * 1290
-              end
-            ),
-            0
-          )
+          case
+            when coalesce(metadata->>'extraSupportCents', '') ~ '^[0-9]+
+      from public.payment_intents
+      where cause_id = ${EBOOK_RACAO_CAUSE_ID}::uuid
+        and status = 'SUCCEEDED'
+    `;
+    const row = rows[0] ?? {
+      confirmed_kg: 0,
+      confirmed_contributions: 0,
+      total_received_cents: 0n,
+      extra_support_cents: 0n,
+    };
+    const goalKg = 100;
+    return {
+      data: {
+        confirmedKg: row.confirmed_kg,
+        confirmedContributions: row.confirmed_contributions,
+        totalReceivedCents: Number(row.total_received_cents),
+        extraSupportCents: Number(row.extra_support_cents),
+        goalKg,
+        progressPercent: Math.min(100, Math.round((row.confirmed_kg / goalKg) * 100)),
+      },
+    };
+  });
+
+  app.get("/v1/payments/:id", async (req, reply) => {
+    const params = z.object({ id: z.string().uuid() }).safeParse(req.params);
+    if (!params.success) return reply.code(400).send({ error: { code: "INVALID_ID", message: "Invalid payment intent id" } });
+
+    const rows = await prisma.$queryRaw<IntentRow[]>`
+      select id, cause_id, provider_session_id, provider_transaction_id, provider_reference, payment_method,
+             amount_cents, currency, status, checkout_url, metadata, created_at, updated_at
+      from public.payment_intents where id = ${params.data.id}::uuid limit 1
+    `;
+    let intent = rows[0];
+    if (!intent) return reply.code(404).send({ error: { code: "NOT_FOUND", message: "Payment intent not found" } });
+
+    if (intent.provider_session_id && ["PENDING", "PROCESSING"].includes(intent.status)) {
+      try {
+        const session = await getXPaymentsSession(intent.provider_session_id, intent.currency);
+        const providerStatus = normalizeXPaymentsStatus(session.status ?? (session.metadata as Record<string, unknown> | undefined)?.checkoutStatus);
+        if (providerStatus && providerStatus !== intent.status) {
+          if (providerStatus === "SUCCEEDED") {
+            const updated = await markSucceeded(prisma, intent);
+            if (updated) intent = updated;
+          } else {
+            const updated = await prisma.$queryRaw<IntentRow[]>`
+              update public.payment_intents set status = ${providerStatus}, updated_at = now()
+              where id = ${intent.id}::uuid and status <> 'SUCCEEDED'
+              returning id, cause_id, provider_session_id, provider_transaction_id, provider_reference, payment_method,
+                        amount_cents, currency, status, checkout_url, metadata, created_at, updated_at
+            `;
+            if (updated[0]) intent = updated[0];
+          }
+        }
+      } catch (error) {
+        app.log.warn({ err: error, intentId: intent.id }, "XPAYMENTS status reconciliation unavailable");
+      }
+    }
+
+    if (intent.provider_transaction_id && ["PENDING", "PROCESSING"].includes(intent.status)) {
+      try {
+        const transaction = await getXPaymentsNativeTransaction(intent.provider_transaction_id, intent.currency);
+        const providerStatus = normalizeXPaymentsStatus(transaction.status);
+        if (providerStatus && providerStatus !== intent.status) {
+          if (providerStatus === "SUCCEEDED") {
+            const updated = await markSucceeded(prisma, intent);
+            if (updated) intent = updated;
+          } else {
+            const updated = await prisma.$queryRaw<IntentRow[]>`
+              update public.payment_intents set status = ${providerStatus}, updated_at = now()
+              where id = ${intent.id}::uuid and status <> 'SUCCEEDED'
+              returning id, cause_id, provider_session_id, provider_transaction_id, provider_reference, payment_method,
+                        amount_cents, currency, status, checkout_url, metadata, created_at, updated_at
+            `;
+            if (updated[0]) intent = updated[0];
+          }
+        }
+      } catch (error) {
+        app.log.warn({ err: error, intentId: intent.id, providerTransactionId: intent.provider_transaction_id }, "XPAYMENTS Native status reconciliation unavailable");
+      }
+    }
+
+    return { data: publicIntent(intent) };
+  });
+}
+
+              then (metadata->>'extraSupportCents')::bigint
+            else 0
+          end
         ), 0)::bigint as extra_support_cents
       from public.payment_intents
       where cause_id = ${EBOOK_RACAO_CAUSE_ID}::uuid
