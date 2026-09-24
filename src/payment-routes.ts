@@ -61,6 +61,7 @@ const trackingFields = {
   content: z.string().trim().max(180).nullable().optional(),
   refCode: z.string().trim().max(120).nullable().optional(),
   landingPath: z.string().trim().max(500).nullable().optional(),
+  rewardKeys: z.array(z.string().trim().min(1).max(80)).max(10).optional(),
 };
 
 const checkoutSchema = z.object({
@@ -99,6 +100,9 @@ function publicIntent(row: IntentRow) {
     paymentMethod: row.payment_method,
     status: row.status,
     action: metadata.nativeAction ?? null,
+    rewardKeys: row.status === "SUCCEEDED" && Array.isArray(metadata.rewardKeys)
+      ? metadata.rewardKeys.filter((value): value is string => typeof value === "string").slice(0, 10)
+      : [],
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -262,6 +266,7 @@ function baseMetadata(input: {
     content: input.content ?? null,
     refCode: input.refCode ?? null,
     landingPath: input.landingPath ?? null,
+    rewardKeys: input.rewardKeys ?? [],
     returnUrl: `${process.env.PUBLIC_SITE_URL ?? "https://mypets.lat"}/causas/${input.cause.slug}`,
   };
 }
