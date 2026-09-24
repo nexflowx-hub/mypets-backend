@@ -110,7 +110,7 @@ echo "Top-up accounting: OK"
 echo "Paid-media attribution persistence: OK"
 echo "Public impact endpoint: OK"
 echo "Paid-traffic technical readiness: OK"
-echo "Live payment proof: inspect /v1/campaigns/ebook-racao/readiness after a real R$12.90 Pix"
+echo 'Live payment proof: inspect /v1/campaigns/ebook-racao/readiness after a real R$12,90 Pix'
 echo "API health: OK"
 echo "No payment secret or payout setting was changed."
 echo "============================================================"
