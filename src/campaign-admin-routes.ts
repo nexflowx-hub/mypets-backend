@@ -196,7 +196,7 @@ export async function registerCampaignAdminRoutes(app: FastifyInstance, prisma: 
     };
 
     const [totalsRows, breakdownRows, dailyRows, currencyRows] = await Promise.all([
-      prisma.$queryRaw<TotalsRow[]>\`
+      prisma.$queryRaw<TotalsRow[]>`
         select
           count(*) filter (where event_name = 'LANDING_VIEW')::int as landing_views,
           count(*) filter (where event_name = 'SUPPORT_STARTED')::int as support_started,
@@ -206,8 +206,8 @@ export async function registerCampaignAdminRoutes(app: FastifyInstance, prisma: 
         from public.growth_events
         where created_at >= now() - make_interval(days => ${days})
           and (${pathFilter}::text is null or landing_path like ${pathFilter})
-      \`,
-      prisma.$queryRaw<BreakdownRow[]>\`
+      `,
+      prisma.$queryRaw<BreakdownRow[]>`
         select
           coalesce(source, '(direct)') as source,
           coalesce(medium, '(none)') as medium,
@@ -221,48 +221,7 @@ export async function registerCampaignAdminRoutes(app: FastifyInstance, prisma: 
           count(*) filter (where event_name = 'SHARE_CLICK')::int as share_clicks,
           coalesce(sum(
             case
-              when event_name = 'DONATION_COMPLETED' and coalesce(metadata->>'amountCents', '') ~ '^[0-9]+
-    const admin = await requireCampaignAdmin(req, reply, prisma);
-    if (!admin) return;
-
-    const params = z.object({ id: z.string().uuid() }).safeParse(req.params);
-    const body = z.object({
-      vertical: verticalSchema,
-      campaignKey: campaignKeySchema.nullable().optional(),
-      campaignMeta: campaignMetaSchema,
-    }).safeParse(req.body);
-    if (!params.success || !body.success) {
-      return reply.code(400).send({ error: { code: "INVALID_INPUT", message: "Invalid campaign configuration" } });
-    }
-
-    const metadata = JSON.stringify(body.data.campaignMeta);
-    try {
-      const rows = await prisma.$queryRaw<AdminCauseRow[]>`
-        update public.causes c
-        set vertical = ${body.data.vertical},
-            campaign_key = ${body.data.campaignKey ?? null},
-            campaign_meta = ${metadata}::jsonb,
-            updated_at = now()
-        from public.protectors p
-        where c.id = ${params.data.id}::uuid and p.id = c.protector_id
-        returning c.id, c.protector_id, p.display_name as protector_name, p.verification as protector_verification,
-                  c.slug, c.title, c.summary, c.country, c.city, c.primary_image, c.support_mode,
-                  c.target_amount_cents, c.raised_amount_cents, c.currency, c.status, c.is_public,
-                  c.vertical, c.campaign_key, c.campaign_meta, c.published_at, c.updated_at
-      `;
-      const row = rows[0];
-      if (!row) return reply.code(404).send({ error: { code: "NOT_FOUND", message: "Cause not found" } });
-      return { data: adminCause(row) };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "";
-      if (message.includes("causes_campaign_key_unique")) {
-        return reply.code(409).send({ error: { code: "CAMPAIGN_KEY_TAKEN", message: "Campaign key already in use" } });
-      }
-      throw error;
-    }
-  });
-}
-
+              when event_name = 'DONATION_COMPLETED' and coalesce(metadata->>'amountCents', '') ~ '^[0-9]+$'
               then (metadata->>'amountCents')::bigint
               else 0
             end
@@ -274,8 +233,8 @@ export async function registerCampaignAdminRoutes(app: FastifyInstance, prisma: 
         having count(*) filter (where event_name in ('LANDING_VIEW','SUPPORT_STARTED','DONATION_STARTED','DONATION_COMPLETED','SHARE_CLICK')) > 0
         order by donation_completed desc, donation_amount_cents desc, support_started desc, landing_views desc
         limit 60
-      \`,
-      prisma.$queryRaw<DailyRow[]>\`
+      `,
+      prisma.$queryRaw<DailyRow[]>`
         select
           date_trunc('day', created_at)::date as day,
           count(*) filter (where event_name = 'LANDING_VIEW')::int as landing_views,
@@ -285,48 +244,7 @@ export async function registerCampaignAdminRoutes(app: FastifyInstance, prisma: 
           count(*) filter (where event_name = 'SHARE_CLICK')::int as share_clicks,
           coalesce(sum(
             case
-              when event_name = 'DONATION_COMPLETED' and coalesce(metadata->>'amountCents', '') ~ '^[0-9]+
-    const admin = await requireCampaignAdmin(req, reply, prisma);
-    if (!admin) return;
-
-    const params = z.object({ id: z.string().uuid() }).safeParse(req.params);
-    const body = z.object({
-      vertical: verticalSchema,
-      campaignKey: campaignKeySchema.nullable().optional(),
-      campaignMeta: campaignMetaSchema,
-    }).safeParse(req.body);
-    if (!params.success || !body.success) {
-      return reply.code(400).send({ error: { code: "INVALID_INPUT", message: "Invalid campaign configuration" } });
-    }
-
-    const metadata = JSON.stringify(body.data.campaignMeta);
-    try {
-      const rows = await prisma.$queryRaw<AdminCauseRow[]>`
-        update public.causes c
-        set vertical = ${body.data.vertical},
-            campaign_key = ${body.data.campaignKey ?? null},
-            campaign_meta = ${metadata}::jsonb,
-            updated_at = now()
-        from public.protectors p
-        where c.id = ${params.data.id}::uuid and p.id = c.protector_id
-        returning c.id, c.protector_id, p.display_name as protector_name, p.verification as protector_verification,
-                  c.slug, c.title, c.summary, c.country, c.city, c.primary_image, c.support_mode,
-                  c.target_amount_cents, c.raised_amount_cents, c.currency, c.status, c.is_public,
-                  c.vertical, c.campaign_key, c.campaign_meta, c.published_at, c.updated_at
-      `;
-      const row = rows[0];
-      if (!row) return reply.code(404).send({ error: { code: "NOT_FOUND", message: "Cause not found" } });
-      return { data: adminCause(row) };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "";
-      if (message.includes("causes_campaign_key_unique")) {
-        return reply.code(409).send({ error: { code: "CAMPAIGN_KEY_TAKEN", message: "Campaign key already in use" } });
-      }
-      throw error;
-    }
-  });
-}
-
+              when event_name = 'DONATION_COMPLETED' and coalesce(metadata->>'amountCents', '') ~ '^[0-9]+$'
               then (metadata->>'amountCents')::bigint
               else 0
             end
@@ -336,54 +254,13 @@ export async function registerCampaignAdminRoutes(app: FastifyInstance, prisma: 
           and (${pathFilter}::text is null or landing_path like ${pathFilter})
         group by date_trunc('day', created_at)::date
         order by day asc
-      \`,
-      prisma.$queryRaw<CurrencyRow[]>\`
+      `,
+      prisma.$queryRaw<CurrencyRow[]>`
         select
           coalesce(nullif(metadata->>'currency', ''), 'UNKNOWN') as currency,
           count(*)::int as donation_completed,
           coalesce(sum(
-            case when coalesce(metadata->>'amountCents', '') ~ '^[0-9]+
-    const admin = await requireCampaignAdmin(req, reply, prisma);
-    if (!admin) return;
-
-    const params = z.object({ id: z.string().uuid() }).safeParse(req.params);
-    const body = z.object({
-      vertical: verticalSchema,
-      campaignKey: campaignKeySchema.nullable().optional(),
-      campaignMeta: campaignMetaSchema,
-    }).safeParse(req.body);
-    if (!params.success || !body.success) {
-      return reply.code(400).send({ error: { code: "INVALID_INPUT", message: "Invalid campaign configuration" } });
-    }
-
-    const metadata = JSON.stringify(body.data.campaignMeta);
-    try {
-      const rows = await prisma.$queryRaw<AdminCauseRow[]>`
-        update public.causes c
-        set vertical = ${body.data.vertical},
-            campaign_key = ${body.data.campaignKey ?? null},
-            campaign_meta = ${metadata}::jsonb,
-            updated_at = now()
-        from public.protectors p
-        where c.id = ${params.data.id}::uuid and p.id = c.protector_id
-        returning c.id, c.protector_id, p.display_name as protector_name, p.verification as protector_verification,
-                  c.slug, c.title, c.summary, c.country, c.city, c.primary_image, c.support_mode,
-                  c.target_amount_cents, c.raised_amount_cents, c.currency, c.status, c.is_public,
-                  c.vertical, c.campaign_key, c.campaign_meta, c.published_at, c.updated_at
-      `;
-      const row = rows[0];
-      if (!row) return reply.code(404).send({ error: { code: "NOT_FOUND", message: "Cause not found" } });
-      return { data: adminCause(row) };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "";
-      if (message.includes("causes_campaign_key_unique")) {
-        return reply.code(409).send({ error: { code: "CAMPAIGN_KEY_TAKEN", message: "Campaign key already in use" } });
-      }
-      throw error;
-    }
-  });
-}
-
+            case when coalesce(metadata->>'amountCents', '') ~ '^[0-9]+$'
               then (metadata->>'amountCents')::bigint else 0 end
           ), 0)::bigint as donation_amount_cents
         from public.growth_events
@@ -392,7 +269,7 @@ export async function registerCampaignAdminRoutes(app: FastifyInstance, prisma: 
           and (${pathFilter}::text is null or landing_path like ${pathFilter})
         group by coalesce(nullif(metadata->>'currency', ''), 'UNKNOWN')
         order by donation_amount_cents desc
-      \`,
+      `,
     ]);
 
     const totals = totalsRows[0] ?? {
