@@ -105,7 +105,7 @@ jobs:
             'XPAYMENTS', 'CI-GROWTH-ATTRIBUTION', 'pix',
             5000, 'BRL', 'ONE_TIME', 'CREATED', 'ci-growth-attribution',
             'github-actions', 'ci', 'mypets_survival_br', 'ci_growth_01', 'ci-growth',
-            '{"landingPath":"/ajudar?utm_source=github-actions&utm_medium=ci&utm_campaign=mypets_survival_br&gclid=ci-gclid","term":"dog-food","utmId":"ci-campaign-id","sourcePlatform":"google_ads","gclid":"ci-gclid","gbraid":"ci-gbraid","wbraid":"ci-wbraid","fbclid":"ci-fbclid","msclkid":"ci-msclkid","ttclid":"ci-ttclid","rewardKeys":["cuidados-essenciais"],"campaignBaseAmountCents":1290,"extraSupportCents":3710,"foodKg":1}'::jsonb
+            '{"landingPath":"/ajudar?utm_source=github-actions&utm_medium=ci&utm_campaign=mypets_survival_br&gclid=ci-gclid","term":"dog-food","utmId":"ci-campaign-id","sourcePlatform":"google_ads","gclid":"ci-gclid","fbclid":"ci-fbclid","foodKg":1}'::jsonb
           );
 
           update public.payment_intents
@@ -125,7 +125,7 @@ jobs:
           PAID_IDS="$(psql "$DIRECT_URL" -At -F '|' -c "select metadata->>'gclid', metadata->>'fbclid', metadata->>'utmId', metadata->>'sourcePlatform', metadata->>'foodKg' from public.growth_events where event_name='DONATION_COMPLETED' and metadata->>'paymentIntentId'='7f650000-0000-4a11-8c01-000000000001' limit 1")"
           [ "$PAID_IDS" = "ci-gclid|ci-fbclid|ci-campaign-id|google_ads|1" ] || { echo "DONATION_COMPLETED lost paid-media metadata: $PAID_IDS" >&2; exit 1; }
 
-          OVERVIEW="$(psql "$DIRECT_URL" -At -F '|' -c "select count(*) filter (where event_name='DONATION_STARTED')::int, count(*) filter (where event_name='DONATION_COMPLETED')::int, coalesce(sum(case when event_name='DONATION_COMPLETED' and coalesce(metadata->>'amountCents','') ~ '^[0-9]+
+          OVERVIEW="$(psql "$DIRECT_URL" -At -F '|' -c "select count(*) filter (where event_name='DONATION_STARTED')::int, count(*) filter (where event_name='DONATION_COMPLETED')::int, coalesce(sum(case when event_name='DONATION_COMPLETED' and coalesce(metadata->>'amountCents','') ~ '^[0-9]+$' then (metadata->>'amountCents')::bigint else 0 end),0)::bigint from public.growth_events where landing_path like '/ajudar%'")"
           [ "$OVERVIEW" = "1|1|5000" ] || { echo "Unexpected growth overview result: $OVERVIEW" >&2; exit 1; }
           echo "Donation attribution and analytics SQL validated"
       - run: npm run typecheck
@@ -178,110 +178,6 @@ jobs:
           curl -fsS --max-time 10 http://127.0.0.1:8081/v1/campaigns/ebook-racao/readiness | tee /tmp/ebook-readiness.json
           jq -e '.data.status == "not_ready" and .data.technicalReady == false and .data.livePaymentProof == true and .data.checks.fundActive == true and .data.checks.unitPrice == true and .data.checks.goal == true and .data.checks.paidAttribution == true and .data.checks.paymentsLive == false' /tmp/ebook-readiness.json >/dev/null
           echo "Ebook paid-traffic readiness endpoint validated in safe CI mode"
-
-          curl -fsS -X POST --max-time 10 http://127.0.0.1:8081/v1/cause-intake/readiness | tee /tmp/intake-readiness.json
-          jq -e '.data.status == "ready" and .data.databaseRoundTrip == true and .data.rolledBack == true' /tmp/intake-readiness.json >/dev/null
-
-          residue="$(psql "$DIRECT_URL" -Atc "select count(*) from public.causes where slug like 'smoke-%'")"
-          [ "$residue" = "0" ] || { echo "Readiness probe left database residue: $residue" >&2; exit 1; }
-          echo "Cause intake DB round-trip validated with rollback"
-
-          cat >/tmp/intake.json <<'JSON'
-          {
-            "projectName": "CI Projeto Comunitário Animal",
-            "contactName": "Responsável CI",
-            "contactEmail": "ci-intake@example.com",
-            "whatsapp": "+5562999999999",
-            "publicWhatsapp": false,
-            "country": "BR",
-            "region": "GO",
-            "city": "Goiania",
-            "causeType": "NGO_PROJECT",
-            "details": "Projeto sintético criado exclusivamente pelo CI para validar o funil completo de captação de projetos do MyPets.",
-            "publicMessage": "Validação automática do funil público de projetos MyPets.",
-            "instagramUrl": null,
-            "facebookUrl": null,
-            "tiktokUrl": null,
-            "primaryImageUrl": null,
-            "mediaLinks": [],
-            "source": "github-actions",
-            "medium": "ci",
-            "campaign": "project-intake-e2e",
-            "content": "real-public-route",
-            "landingPath": "/projetos/apresentar?utm_source=github-actions",
-            "contactConsent": true,
-            "publicationConsent": true,
-            "accuracyConfirmed": true,
-            "marketingConsent": false,
-            "website": ""
-          }
-          JSON
-
-          curl -fsS -X POST --max-time 10 \
-            -H 'Content-Type: application/json' \
-            --data-binary @/tmp/intake.json \
-            http://127.0.0.1:8081/v1/cause-intake | tee /tmp/intake-result.json
-
-          jq -e '.data.id and .data.causeId and .data.slug and .data.verificationStatus == "UNVERIFIED" and .data.fundraisingStatus == "DISABLED" and .data.promotionStatus == "QUEUED"' /tmp/intake-result.json >/dev/null
-          INTAKE_ID="$(jq -r '.data.id' /tmp/intake-result.json)"
-          CAUSE_ID="$(jq -r '.data.causeId' /tmp/intake-result.json)"
-
-          curl -fsS --max-time 10 "http://127.0.0.1:8081/v1/cause-intake/$INTAKE_ID/public-status" | tee /tmp/intake-status.json
-          jq -e --arg id "$INTAKE_ID" --arg cause "$CAUSE_ID" '.data.id == $id and .data.causeId == $cause and .data.verificationStatus == "UNVERIFIED" and .data.fundraisingStatus == "DISABLED" and .data.promotionStatus == "QUEUED"' /tmp/intake-status.json >/dev/null
-
-          DB_STATE="$(psql "$DIRECT_URL" -At -F '|' -c "select c.beneficiary_kind, c.verification_status, c.fundraising_status, ci.status, pq.status from public.causes c join public.cause_intake_submissions ci on ci.cause_id=c.id join public.cause_promotion_queue pq on pq.cause_id=c.id where c.id='$CAUSE_ID'::uuid")"
-          [ "$DB_STATE" = "COMMUNITY|UNVERIFIED|DISABLED|PUBLISHED_UNVERIFIED|QUEUED" ] || { echo "Unexpected intake DB state: $DB_STATE" >&2; exit 1; }
-          echo "Real public cause-intake route validated end-to-end"
-      - run: docker build -t mypets-backend:ci .
- then (metadata->>'amountCents')::bigint else 0 end),0)::bigint from public.growth_events where landing_path like '/ajudar%'")"
-          [ "$OVERVIEW" = "1|1|5000" ] || { echo "Unexpected growth overview result: $OVERVIEW" >&2; exit 1; }
-          echo "Donation attribution and analytics SQL validated"
-      - run: npm run typecheck
-      - run: npm run build
-      - name: Exercise cause intake database round-trip
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm start > /tmp/mypets-api.log 2>&1 &
-          API_PID=$!
-          trap 'kill "$API_PID" 2>/dev/null || true; cat /tmp/mypets-api.log || true' EXIT
-
-          ready=false
-          for attempt in $(seq 1 20); do
-            if curl -fsS --max-time 5 http://127.0.0.1:8081/health >/tmp/health.json; then
-              ready=true
-              break
-            fi
-            sleep 1
-          done
-          [ "$ready" = "true" ] || { echo "API did not become ready" >&2; exit 1; }
-
-          psql "$DIRECT_URL" -v ON_ERROR_STOP=1 <<'SQL'
-          insert into public.payment_intents (
-            id, cause_id, provider, provider_reference, payment_method,
-            amount_cents, currency, frequency, status, idempotency_key, metadata, succeeded_at
-          ) values
-          (
-            '7f650000-0000-4a11-8c01-000000000011'::uuid,
-            '9a7f1000-0000-4a11-8c01-000000000007'::uuid,
-            'XPAYMENTS', 'CI-EBOOK-TOPUP-1', 'pix',
-            2000, 'BRL', 'ONE_TIME', 'SUCCEEDED', 'ci-ebook-topup-1',
-            '{"rewardKeys":["cuidados-essenciais"],"foodKg":1,"campaignBaseAmountCents":1290,"extraSupportCents":710}'::jsonb,
-            now()
-          ),
-          (
-            '7f650000-0000-4a11-8c01-000000000012'::uuid,
-            '9a7f1000-0000-4a11-8c01-000000000007'::uuid,
-            'XPAYMENTS', 'CI-EBOOK-TOPUP-3', 'pix',
-            5000, 'BRL', 'ONE_TIME', 'SUCCEEDED', 'ci-ebook-topup-3',
-            '{"rewardKeys":["cuidados-essenciais","treino-gentil","rotina-alimentacao"],"foodKg":3,"campaignBaseAmountCents":3870,"extraSupportCents":1130}'::jsonb,
-            now()
-          );
-          SQL
-
-          curl -fsS --max-time 10 http://127.0.0.1:8081/v1/campaigns/ebook-racao/impact | tee /tmp/ebook-impact.json
-          jq -e '.data.confirmedKg == 4 and .data.confirmedContributions == 2 and .data.totalReceivedCents == 7000 and .data.extraSupportCents == 1840 and .data.goalKg == 100 and .data.progressPercent == 4' /tmp/ebook-impact.json >/dev/null
-          echo "Ebook impact accounting validated: top-ups do not inflate guaranteed kg"
 
           curl -fsS -X POST --max-time 10 http://127.0.0.1:8081/v1/cause-intake/readiness | tee /tmp/intake-readiness.json
           jq -e '.data.status == "ready" and .data.databaseRoundTrip == true and .data.rolledBack == true' /tmp/intake-readiness.json >/dev/null
