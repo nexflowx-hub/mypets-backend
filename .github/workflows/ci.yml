@@ -90,6 +90,41 @@ jobs:
             psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f "$migration"
           done
       - run: psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f supabase/seed.sql
+      - name: Verify donation growth attribution and analytics SQL
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$DIRECT_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          insert into public.payment_intents (
+            id, cause_id, provider, provider_reference, payment_method,
+            amount_cents, currency, frequency, status, idempotency_key,
+            source, medium, campaign, content, ref_code, metadata
+          ) values (
+            '7f650000-0000-4a11-8c01-000000000001'::uuid,
+            '9a7f1000-0000-4a11-8c01-000000000001'::uuid,
+            'XPAYMENTS', 'CI-GROWTH-ATTRIBUTION', 'pix',
+            5000, 'BRL', 'ONE_TIME', 'CREATED', 'ci-growth-attribution',
+            'github-actions', 'ci', 'mypets_survival_br', 'ci_growth_01', 'ci-growth',
+            '{"landingPath":"/ajudar?utm_source=github-actions&utm_medium=ci&utm_campaign=mypets_survival_br"}'::jsonb
+          );
+
+          update public.payment_intents
+          set status = 'PENDING', updated_at = now()
+          where id = '7f650000-0000-4a11-8c01-000000000001'::uuid;
+
+          update public.payment_intents
+          set status = 'SUCCEEDED', succeeded_at = now(), updated_at = now()
+          where id = '7f650000-0000-4a11-8c01-000000000001'::uuid;
+          SQL
+
+          STARTED_PATH="$(psql "$DIRECT_URL" -Atc "select landing_path from public.growth_events where event_name='DONATION_STARTED' and metadata->>'paymentIntentId'='7f650000-0000-4a11-8c01-000000000001' limit 1")"
+          COMPLETED_PATH="$(psql "$DIRECT_URL" -Atc "select landing_path from public.growth_events where event_name='DONATION_COMPLETED' and metadata->>'paymentIntentId'='7f650000-0000-4a11-8c01-000000000001' limit 1")"
+          [ "$STARTED_PATH" = "/ajudar?utm_source=github-actions&utm_medium=ci&utm_campaign=mypets_survival_br" ] || { echo "DONATION_STARTED lost landing attribution: $STARTED_PATH" >&2; exit 1; }
+          [ "$COMPLETED_PATH" = "$STARTED_PATH" ] || { echo "DONATION_COMPLETED lost landing attribution: $COMPLETED_PATH" >&2; exit 1; }
+
+          OVERVIEW="$(psql "$DIRECT_URL" -At -F '|' -c "select count(*) filter (where event_name='DONATION_STARTED')::int, count(*) filter (where event_name='DONATION_COMPLETED')::int, coalesce(sum(case when event_name='DONATION_COMPLETED' and coalesce(metadata->>'amountCents','') ~ '^[0-9]+$' then (metadata->>'amountCents')::bigint else 0 end),0)::bigint from public.growth_events where landing_path like '/ajudar%'")"
+          [ "$OVERVIEW" = "1|1|5000" ] || { echo "Unexpected growth overview result: $OVERVIEW" >&2; exit 1; }
+          echo "Donation attribution and analytics SQL validated"
       - run: npm run typecheck
       - run: npm run build
       - name: Exercise cause intake database round-trip
