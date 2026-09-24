@@ -521,6 +521,77 @@ export async function registerPaymentRoutes(app: FastifyInstance, prisma: Prisma
     }
   });
 
+  app.get("/v1/campaigns/ebook-racao/readiness", async () => {
+    const cause = await loadCause(prisma, EBOOK_RACAO_CAUSE_ID);
+    const meta = cause ? metadataRecord(cause.campaign_meta) : {};
+    const unitPriceCents = Number(meta.unitPriceCents);
+    const goalKg = Number(meta.goalKg);
+
+    const attributionRows = await prisma.$queryRaw<Array<{ ready: boolean }>>`
+      select (
+        pg_get_functiondef('public.track_payment_intent_growth_event()'::regprocedure) like '%gclid%'
+        and pg_get_functiondef('public.track_payment_intent_growth_event()'::regprocedure) like '%fbclid%'
+      ) as ready
+    `;
+    const liveRows = await prisma.$queryRaw<Array<{
+      id: string;
+      amount_cents: number;
+      metadata: unknown;
+      succeeded_at: Date | null;
+    }>>`
+      select id, amount_cents, metadata, succeeded_at
+      from public.payment_intents
+      where cause_id = ${EBOOK_RACAO_CAUSE_ID}::uuid
+        and status = 'SUCCEEDED'
+      order by succeeded_at desc nulls last, updated_at desc
+      limit 1
+    `;
+
+    const latest = liveRows[0] ?? null;
+    const latestMetadata = latest ? metadataRecord(latest.metadata) : {};
+    const rewardKeys = Array.isArray(latestMetadata.rewardKeys)
+      ? latestMetadata.rewardKeys.filter((value): value is string => typeof value === "string")
+      : [];
+
+    const checks = {
+      paymentsLive: process.env.PAYMENTS_LIVE === "true",
+      provider: (process.env.PAYMENT_PROVIDER ?? "").toLowerCase() === "xpayments",
+      brlEnabled: xpaymentsCurrencyEnabled("BRL"),
+      pixEnabled: xpaymentsNativeMethodEnabled("BRL", "pix"),
+      fundActive: Boolean(
+        cause
+        && cause.status === "ACTIVE"
+        && cause.is_public
+        && cause.currency === "BRL"
+        && cause.fund_code === "EBOOK_RACAO"
+        && cause.support_mode !== "NON_FINANCIAL"
+      ),
+      unitPrice: unitPriceCents === 1290,
+      goal: goalKg === 100,
+      paidAttribution: attributionRows[0]?.ready === true,
+    };
+    const technicalReady = Object.values(checks).every(Boolean);
+    const livePaymentProof = Boolean(latest && rewardKeys.length >= 1);
+
+    return {
+      data: {
+        status: technicalReady && livePaymentProof ? "ready" : technicalReady ? "needs_live_payment" : "not_ready",
+        technicalReady,
+        livePaymentProof,
+        checks,
+        latestConfirmed: latest
+          ? {
+              paymentIntentId: latest.id,
+              amountCents: latest.amount_cents,
+              rewardCount: rewardKeys.length,
+              foodKg: Number(latestMetadata.foodKg ?? rewardKeys.length),
+              succeededAt: latest.succeeded_at,
+            }
+          : null,
+      },
+    };
+  });
+
   app.get("/v1/campaigns/ebook-racao/impact", async () => {
     const rows = await prisma.$queryRaw<Array<{
       confirmed_kg: number;
