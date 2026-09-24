@@ -68,6 +68,15 @@ const trackingFields = {
   medium: z.string().trim().max(120).nullable().optional(),
   campaign: z.string().trim().max(180).nullable().optional(),
   content: z.string().trim().max(180).nullable().optional(),
+  term: z.string().trim().max(180).nullable().optional(),
+  utmId: z.string().trim().max(180).nullable().optional(),
+  sourcePlatform: z.string().trim().max(120).nullable().optional(),
+  gclid: z.string().trim().max(300).nullable().optional(),
+  gbraid: z.string().trim().max(300).nullable().optional(),
+  wbraid: z.string().trim().max(300).nullable().optional(),
+  fbclid: z.string().trim().max(500).nullable().optional(),
+  msclkid: z.string().trim().max(300).nullable().optional(),
+  ttclid: z.string().trim().max(500).nullable().optional(),
   refCode: z.string().trim().max(120).nullable().optional(),
   landingPath: z.string().trim().max(500).nullable().optional(),
   rewardKeys: z.array(z.string().trim().min(1).max(80)).max(10).optional(),
@@ -285,6 +294,15 @@ function baseMetadata(input: {
   medium?: string | null;
   campaign?: string | null;
   content?: string | null;
+  term?: string | null;
+  utmId?: string | null;
+  sourcePlatform?: string | null;
+  gclid?: string | null;
+  gbraid?: string | null;
+  wbraid?: string | null;
+  fbclid?: string | null;
+  msclkid?: string | null;
+  ttclid?: string | null;
   refCode?: string | null;
   landingPath?: string | null;
   amountCents?: number;
@@ -320,6 +338,15 @@ function baseMetadata(input: {
     medium: input.medium ?? null,
     campaign: input.campaign ?? null,
     content: input.content ?? null,
+    term: input.term ?? null,
+    utmId: input.utmId ?? null,
+    sourcePlatform: input.sourcePlatform ?? null,
+    gclid: input.gclid ?? null,
+    gbraid: input.gbraid ?? null,
+    wbraid: input.wbraid ?? null,
+    fbclid: input.fbclid ?? null,
+    msclkid: input.msclkid ?? null,
+    ttclid: input.ttclid ?? null,
     refCode: input.refCode ?? null,
     landingPath: input.landingPath ?? null,
     rewardKeys,
@@ -492,6 +519,77 @@ export async function registerPaymentRoutes(app: FastifyInstance, prisma: Prisma
       await prisma.$executeRaw`update public.payment_intents set status = 'FAILED', updated_at = now() where id = ${intentId}::uuid`;
       return reply.code(502).send({ error: { code: "XPAYMENTS_NATIVE_FAILED", message: "Could not create the selected payment method" } });
     }
+  });
+
+  app.get("/v1/campaigns/ebook-racao/readiness", async () => {
+    const cause = await loadCause(prisma, EBOOK_RACAO_CAUSE_ID);
+    const meta = cause ? metadataRecord(cause.campaign_meta) : {};
+    const unitPriceCents = Number(meta.unitPriceCents);
+    const goalKg = Number(meta.goalKg);
+
+    const attributionRows = await prisma.$queryRaw<Array<{ ready: boolean }>>`
+      select (
+        pg_get_functiondef('public.track_payment_intent_growth_event()'::regprocedure) like '%gclid%'
+        and pg_get_functiondef('public.track_payment_intent_growth_event()'::regprocedure) like '%fbclid%'
+      ) as ready
+    `;
+    const liveRows = await prisma.$queryRaw<Array<{
+      id: string;
+      amount_cents: number;
+      metadata: unknown;
+      succeeded_at: Date | null;
+    }>>`
+      select id, amount_cents, metadata, succeeded_at
+      from public.payment_intents
+      where cause_id = ${EBOOK_RACAO_CAUSE_ID}::uuid
+        and status = 'SUCCEEDED'
+      order by succeeded_at desc nulls last, updated_at desc
+      limit 1
+    `;
+
+    const latest = liveRows[0] ?? null;
+    const latestMetadata = latest ? metadataRecord(latest.metadata) : {};
+    const rewardKeys = Array.isArray(latestMetadata.rewardKeys)
+      ? latestMetadata.rewardKeys.filter((value): value is string => typeof value === "string")
+      : [];
+
+    const checks = {
+      paymentsLive: process.env.PAYMENTS_LIVE === "true",
+      provider: (process.env.PAYMENT_PROVIDER ?? "").toLowerCase() === "xpayments",
+      brlEnabled: xpaymentsCurrencyEnabled("BRL"),
+      pixEnabled: xpaymentsNativeMethodEnabled("BRL", "pix"),
+      fundActive: Boolean(
+        cause
+        && cause.status === "ACTIVE"
+        && cause.is_public
+        && cause.currency === "BRL"
+        && cause.fund_code === "EBOOK_RACAO"
+        && cause.support_mode !== "NON_FINANCIAL"
+      ),
+      unitPrice: unitPriceCents === 1290,
+      goal: goalKg === 100,
+      paidAttribution: attributionRows[0]?.ready === true,
+    };
+    const technicalReady = Object.values(checks).every(Boolean);
+    const livePaymentProof = Boolean(latest && rewardKeys.length >= 1);
+
+    return {
+      data: {
+        status: technicalReady && livePaymentProof ? "ready" : technicalReady ? "needs_live_payment" : "not_ready",
+        technicalReady,
+        livePaymentProof,
+        checks,
+        latestConfirmed: latest
+          ? {
+              paymentIntentId: latest.id,
+              amountCents: latest.amount_cents,
+              rewardCount: rewardKeys.length,
+              foodKg: Number(latestMetadata.foodKg ?? rewardKeys.length),
+              succeededAt: latest.succeeded_at,
+            }
+          : null,
+      },
+    };
   });
 
   app.get("/v1/campaigns/ebook-racao/impact", async () => {

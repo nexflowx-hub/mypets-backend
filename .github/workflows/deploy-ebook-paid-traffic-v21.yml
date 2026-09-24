@@ -1,0 +1,76 @@
+name: Deploy MyPets eBook Paid Traffic v21
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mypets-ebook-paid-traffic-v21-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      DEPLOY_HOST: ${{ secrets.MYPETS_VPS_HOST || secrets.VPS_HOST || secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.MYPETS_VPS_USER || secrets.VPS_USER || secrets.SSH_USER }}
+      DEPLOY_KEY: ${{ secrets.MYPETS_VPS_SSH_KEY || secrets.VPS_SSH_KEY || secrets.SSH_PRIVATE_KEY }}
+      DEPLOY_PORT: ${{ secrets.MYPETS_VPS_PORT || secrets.VPS_PORT || '22' }}
+
+    steps:
+      - name: Check deploy credentials
+        id: preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${DEPLOY_HOST:-}" ] && [ -n "${DEPLOY_USER:-}" ] && [ -n "${DEPLOY_KEY:-}" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "Deployment credentials detected."
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::error::Production VPS deploy credentials are not configured."
+            exit 1
+          fi
+
+      - name: Deploy guarded paid-traffic release
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: ${{ env.DEPLOY_HOST }}
+          username: ${{ env.DEPLOY_USER }}
+          key: ${{ env.DEPLOY_KEY }}
+          port: ${{ env.DEPLOY_PORT }}
+          command_timeout: 15m
+          script_stop: true
+          script: |
+            set -Eeuo pipefail
+            cd /srv/apps/mypets/api
+            test -d .git
+            git fetch --prune origin main
+            git checkout main
+            git merge --ff-only origin/main
+            bash deploy/ebook-racao-paid-traffic-v21.sh
+
+      - name: Verify public production
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --retry 10 --retry-delay 3 --retry-all-errors --max-time 20 -fsS https://api.mypets.lat/health | tee /tmp/health.json
+          jq -e '.status == "ok" and .database == "ok"' /tmp/health.json >/dev/null
+
+          curl --retry 10 --retry-delay 3 --retry-all-errors --max-time 20 -fsS https://api.mypets.lat/v1/campaigns/ebook-racao/impact | tee /tmp/impact.json
+          jq -e '.data.confirmedKg >= 0 and .data.confirmedContributions >= 0 and .data.extraSupportCents >= 0 and .data.goalKg == 100' /tmp/impact.json >/dev/null
+
+          curl --retry 10 --retry-delay 3 --retry-all-errors --max-time 20 -fsS https://api.mypets.lat/v1/campaigns/ebook-racao/readiness | tee /tmp/paid-readiness.json
+          jq -e '.data.technicalReady == true and .data.checks.paymentsLive == true and .data.checks.provider == true and .data.checks.brlEnabled == true and .data.checks.pixEnabled == true and .data.checks.fundActive == true and .data.checks.unitPrice == true and .data.checks.goal == true and .data.checks.paidAttribution == true' /tmp/paid-readiness.json >/dev/null
+
+          echo "MyPets eBook paid-traffic v21 production verification passed."

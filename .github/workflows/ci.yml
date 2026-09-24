@@ -105,7 +105,7 @@ jobs:
             'XPAYMENTS', 'CI-GROWTH-ATTRIBUTION', 'pix',
             5000, 'BRL', 'ONE_TIME', 'CREATED', 'ci-growth-attribution',
             'github-actions', 'ci', 'mypets_survival_br', 'ci_growth_01', 'ci-growth',
-            '{"landingPath":"/ajudar?utm_source=github-actions&utm_medium=ci&utm_campaign=mypets_survival_br"}'::jsonb
+            '{"landingPath":"/ajudar?utm_source=github-actions&utm_medium=ci&utm_campaign=mypets_survival_br&gclid=ci-gclid","term":"dog-food","utmId":"ci-campaign-id","sourcePlatform":"google_ads","gclid":"ci-gclid","fbclid":"ci-fbclid","foodKg":1}'::jsonb
           );
 
           update public.payment_intents
@@ -119,8 +119,11 @@ jobs:
 
           STARTED_PATH="$(psql "$DIRECT_URL" -Atc "select landing_path from public.growth_events where event_name='DONATION_STARTED' and metadata->>'paymentIntentId'='7f650000-0000-4a11-8c01-000000000001' limit 1")"
           COMPLETED_PATH="$(psql "$DIRECT_URL" -Atc "select landing_path from public.growth_events where event_name='DONATION_COMPLETED' and metadata->>'paymentIntentId'='7f650000-0000-4a11-8c01-000000000001' limit 1")"
-          [ "$STARTED_PATH" = "/ajudar?utm_source=github-actions&utm_medium=ci&utm_campaign=mypets_survival_br" ] || { echo "DONATION_STARTED lost landing attribution: $STARTED_PATH" >&2; exit 1; }
+          [ "$STARTED_PATH" = "/ajudar?utm_source=github-actions&utm_medium=ci&utm_campaign=mypets_survival_br&gclid=ci-gclid" ] || { echo "DONATION_STARTED lost landing attribution: $STARTED_PATH" >&2; exit 1; }
           [ "$COMPLETED_PATH" = "$STARTED_PATH" ] || { echo "DONATION_COMPLETED lost landing attribution: $COMPLETED_PATH" >&2; exit 1; }
+
+          PAID_IDS="$(psql "$DIRECT_URL" -At -F '|' -c "select metadata->>'gclid', metadata->>'fbclid', metadata->>'utmId', metadata->>'sourcePlatform', metadata->>'foodKg' from public.growth_events where event_name='DONATION_COMPLETED' and metadata->>'paymentIntentId'='7f650000-0000-4a11-8c01-000000000001' limit 1")"
+          [ "$PAID_IDS" = "ci-gclid|ci-fbclid|ci-campaign-id|google_ads|1" ] || { echo "DONATION_COMPLETED lost paid-media metadata: $PAID_IDS" >&2; exit 1; }
 
           OVERVIEW="$(psql "$DIRECT_URL" -At -F '|' -c "select count(*) filter (where event_name='DONATION_STARTED')::int, count(*) filter (where event_name='DONATION_COMPLETED')::int, coalesce(sum(case when event_name='DONATION_COMPLETED' and coalesce(metadata->>'amountCents','') ~ '^[0-9]+$' then (metadata->>'amountCents')::bigint else 0 end),0)::bigint from public.growth_events where landing_path like '/ajudar%'")"
           [ "$OVERVIEW" = "1|1|5000" ] || { echo "Unexpected growth overview result: $OVERVIEW" >&2; exit 1; }
@@ -171,6 +174,10 @@ jobs:
           curl -fsS --max-time 10 http://127.0.0.1:8081/v1/campaigns/ebook-racao/impact | tee /tmp/ebook-impact.json
           jq -e '.data.confirmedKg == 4 and .data.confirmedContributions == 2 and .data.totalReceivedCents == 7000 and .data.extraSupportCents == 1840 and .data.goalKg == 100 and .data.progressPercent == 4' /tmp/ebook-impact.json >/dev/null
           echo "Ebook impact accounting validated: top-ups do not inflate guaranteed kg"
+
+          curl -fsS --max-time 10 http://127.0.0.1:8081/v1/campaigns/ebook-racao/readiness | tee /tmp/ebook-readiness.json
+          jq -e '.data.status == "not_ready" and .data.technicalReady == false and .data.livePaymentProof == true and .data.checks.fundActive == true and .data.checks.unitPrice == true and .data.checks.goal == true and .data.checks.paidAttribution == true and .data.checks.paymentsLive == false' /tmp/ebook-readiness.json >/dev/null
+          echo "Ebook paid-traffic readiness endpoint validated in safe CI mode"
 
           curl -fsS -X POST --max-time 10 http://127.0.0.1:8081/v1/cause-intake/readiness | tee /tmp/intake-readiness.json
           jq -e '.data.status == "ready" and .data.databaseRoundTrip == true and .data.rolledBack == true' /tmp/intake-readiness.json >/dev/null
