@@ -60,7 +60,7 @@ const EBOOK_REWARD_KEYS = new Set([
   "filhote-primeiros-30-dias",
   "treino-gentil",
   "guia-das-racas",
-  "alimentacao-bem-estar",
+  "rotina-alimentacao",
 ]);
 
 const trackingFields = {
