@@ -203,14 +203,32 @@ function campaignUnitPrice(cause: CausePaymentRow) {
   return Number.isInteger(value) && value >= 100 ? value : null;
 }
 
-function campaignAmountError(cause: CausePaymentRow, amountCents: number) {
+function campaignAmountError(cause: CausePaymentRow, amountCents: number, rewardKeys: string[] | undefined) {
   const unitPrice = campaignUnitPrice(cause);
   if (!unitPrice) return null;
-  if (amountCents < unitPrice || amountCents % unitPrice !== 0) {
+
+  const keys = rewardKeys ?? [];
+  const uniqueKeys = [...new Set(keys)];
+  if (
+    cause.fund_code !== "EBOOK_RACAO" ||
+    uniqueKeys.length < 1 ||
+    uniqueKeys.length > 5 ||
+    uniqueKeys.length !== keys.length ||
+    uniqueKeys.some((key) => !EBOOK_REWARD_KEYS.has(key))
+  ) {
     return {
       status: 409,
-      code: "INVALID_CAMPAIGN_UNIT_AMOUNT",
-      message: `This campaign requires exact units of ${unitPrice} cents`,
+      code: "INVALID_CAMPAIGN_REWARDS",
+      message: "This campaign requires a valid ebook selection",
+    };
+  }
+
+  const baseAmountCents = uniqueKeys.length * unitPrice;
+  if (amountCents < baseAmountCents) {
+    return {
+      status: 409,
+      code: "INVALID_CAMPAIGN_AMOUNT",
+      message: `This campaign requires at least ${baseAmountCents} cents for the selected rewards`,
     };
   }
   return null;
@@ -273,7 +291,18 @@ function baseMetadata(input: {
   rewardKeys?: string[];
 }) {
   const unitPriceCents = campaignUnitPrice(input.cause);
-  const unitCount = unitPriceCents && input.amountCents ? input.amountCents / unitPriceCents : null;
+  const rewardKeys = [...new Set(input.rewardKeys ?? [])];
+  const unitCount = input.cause.fund_code === "EBOOK_RACAO"
+    ? rewardKeys.length
+    : unitPriceCents && input.amountCents
+      ? input.amountCents / unitPriceCents
+      : null;
+  const campaignBaseAmountCents = input.cause.fund_code === "EBOOK_RACAO" && unitPriceCents
+    ? rewardKeys.length * unitPriceCents
+    : null;
+  const extraSupportCents = campaignBaseAmountCents != null && input.amountCents
+    ? Math.max(0, input.amountCents - campaignBaseAmountCents)
+    : 0;
   return {
     mypetsIntentId: input.intentId,
     causeId: input.cause.id,
@@ -282,6 +311,8 @@ function baseMetadata(input: {
     fundCode: input.cause.fund_code,
     campaignUnitPriceCents: unitPriceCents,
     campaignUnitCount: unitCount,
+    campaignBaseAmountCents,
+    extraSupportCents,
     foodKg: input.cause.fund_code === "EBOOK_RACAO" ? unitCount : null,
     targetType: "CAUSE",
     frequency: "ONE_TIME",
@@ -291,7 +322,7 @@ function baseMetadata(input: {
     content: input.content ?? null,
     refCode: input.refCode ?? null,
     landingPath: input.landingPath ?? null,
-    rewardKeys: input.rewardKeys ?? [],
+    rewardKeys,
     returnUrl: `${process.env.PUBLIC_SITE_URL ?? "https://mypets.lat"}/causas/${input.cause.slug}`,
   };
 }
@@ -311,7 +342,7 @@ export async function registerPaymentRoutes(app: FastifyInstance, prisma: Prisma
       const error = invalidCause!;
       return reply.code(error.status).send({ error: { code: error.code, message: error.message } });
     }
-    const invalidAmount = campaignAmountError(cause, parsed.data.amountCents);
+    const invalidAmount = campaignAmountError(cause, parsed.data.amountCents, parsed.data.rewardKeys);
     if (invalidAmount) {
       return reply.code(invalidAmount.status).send({ error: { code: invalidAmount.code, message: invalidAmount.message } });
     }
@@ -388,7 +419,7 @@ export async function registerPaymentRoutes(app: FastifyInstance, prisma: Prisma
       const error = invalidCause!;
       return reply.code(error.status).send({ error: { code: error.code, message: error.message } });
     }
-    const invalidAmount = campaignAmountError(cause, parsed.data.amountCents);
+    const invalidAmount = campaignAmountError(cause, parsed.data.amountCents, parsed.data.rewardKeys);
     if (invalidAmount) {
       return reply.code(invalidAmount.status).send({ error: { code: invalidAmount.code, message: invalidAmount.message } });
     }
