@@ -5,7 +5,8 @@ APP_DIR="/srv/apps/mypets/api"
 ENV_FILE="/srv/apps/mypets/env/api.env"
 COMPOSE_FILE="$APP_DIR/deploy/compose.yml"
 API_CONTAINER="mypets-api"
-MIGRATION="20260924161000_ebook_racao_1kg_fund.sql"
+GROWTH_MIGRATION="20260924063000_growth_landing_attribution.sql"
+EBOOK_MIGRATION="20260924161000_ebook_racao_1kg_fund.sql"
 
 log() { printf '\n[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
 fail() { echo "ERROR: $*" >&2; exit 1; }
@@ -81,6 +82,13 @@ echo
 curl -fsS https://api.mypets.lat/v1/config
 echo
 
+log "Proving cause-intake DB round-trip"
+READINESS="$(curl -fsS -X POST https://api.mypets.lat/v1/cause-intake/readiness)"
+echo "$READINESS"
+printf '%s' "$READINESS" | grep -q '"status":"ready"' || fail "Readiness status is not ready"
+printf '%s' "$READINESS" | grep -q '"databaseRoundTrip":true' || fail "Database round-trip was not confirmed"
+printf '%s' "$READINESS" | grep -q '"rolledBack":true' || fail "Readiness transaction was not rolled back"
+
 PAYMENTS_LIVE_AFTER="$(sed -n 's/^PAYMENTS_LIVE=//p' "$ENV_FILE" | tail -1)"
 PAYOUTS_ENABLED_AFTER="$(sed -n 's/^PAYOUTS_ENABLED=//p' "$ENV_FILE" | tail -1)"
 [ "$PAYMENTS_LIVE_BEFORE" = "$PAYMENTS_LIVE_AFTER" ] || fail "PAYMENTS_LIVE changed unexpectedly"
@@ -89,6 +97,8 @@ PAYOUTS_ENABLED_AFTER="$(sed -n 's/^PAYOUTS_ENABLED=//p' "$ENV_FILE" | tail -1)"
 echo
 echo "============================================================"
 echo "MyPets eBook Racao v19 deployed and verified."
+echo "Growth landing attribution: OK"
+echo "Cause intake readiness: OK"
 echo "Fund EBOOK_RACAO: 1 kg @ BRL 12.90: OK"
 echo "API health: OK"
 echo "No payment secret or payout setting was changed."
