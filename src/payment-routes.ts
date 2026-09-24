@@ -246,6 +246,7 @@ function baseMetadata(input: {
   refCode?: string | null;
   landingPath?: string | null;
   amountCents?: number;
+  rewardKeys?: string[];
 }) {
   const unitPriceCents = campaignUnitPrice(input.cause);
   const unitCount = unitPriceCents && input.amountCents ? input.amountCents / unitPriceCents : null;
