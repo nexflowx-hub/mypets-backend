@@ -25,6 +25,8 @@ type CausePaymentRow = {
   currency: PaymentCurrency | null;
   status: string;
   is_public: boolean;
+  fund_code: string | null;
+  campaign_meta: unknown;
 };
 
 type IntentRow = {
@@ -145,7 +147,7 @@ function methodCustomer(input: z.infer<typeof nativeSchema>) {
 
 async function loadCause(prisma: PrismaClient, causeId: string) {
   const causes = await prisma.$queryRaw<CausePaymentRow[]>`
-    select id, protector_id, title, slug, support_mode, currency, status, is_public
+    select id, protector_id, title, slug, support_mode, currency, status, is_public, fund_code, campaign_meta
     from public.causes
     where id = ${causeId}::uuid
     limit 1
@@ -162,6 +164,26 @@ function causePaymentError(cause: CausePaymentRow | null) {
   }
   if (!xpaymentsCurrencyEnabled(cause.currency)) {
     return { status: 503, code: "CURRENCY_NOT_CONFIGURED", message: `Payments in ${cause.currency} are not configured` };
+  }
+  return null;
+}
+
+function campaignUnitPrice(cause: CausePaymentRow) {
+  if (cause.fund_code !== "EBOOK_RACAO") return null;
+  const meta = metadataRecord(cause.campaign_meta);
+  const value = Number(meta.unitPriceCents);
+  return Number.isInteger(value) && value >= 100 ? value : null;
+}
+
+function campaignAmountError(cause: CausePaymentRow, amountCents: number) {
+  const unitPrice = campaignUnitPrice(cause);
+  if (!unitPrice) return null;
+  if (amountCents < unitPrice || amountCents % unitPrice !== 0) {
+    return {
+      status: 409,
+      code: "INVALID_CAMPAIGN_UNIT_AMOUNT",
+      message: `This campaign requires exact units of ${unitPrice} cents`,
+    };
   }
   return null;
 }
@@ -219,12 +241,19 @@ function baseMetadata(input: {
   content?: string | null;
   refCode?: string | null;
   landingPath?: string | null;
+  amountCents?: number;
 }) {
+  const unitPriceCents = campaignUnitPrice(input.cause);
+  const unitCount = unitPriceCents && input.amountCents ? input.amountCents / unitPriceCents : null;
   return {
     mypetsIntentId: input.intentId,
     causeId: input.cause.id,
     causeSlug: input.cause.slug,
     protectorId: input.cause.protector_id,
+    fundCode: input.cause.fund_code,
+    campaignUnitPriceCents: unitPriceCents,
+    campaignUnitCount: unitCount,
+    foodKg: input.cause.fund_code === "EBOOK_RACAO" ? unitCount : null,
     targetType: "CAUSE",
     frequency: "ONE_TIME",
     source: input.source ?? null,
@@ -251,6 +280,10 @@ export async function registerPaymentRoutes(app: FastifyInstance, prisma: Prisma
     if (invalidCause || !cause?.currency) {
       const error = invalidCause!;
       return reply.code(error.status).send({ error: { code: error.code, message: error.message } });
+    }
+    const invalidAmount = campaignAmountError(cause, parsed.data.amountCents);
+    if (invalidAmount) {
+      return reply.code(invalidAmount.status).send({ error: { code: invalidAmount.code, message: invalidAmount.message } });
     }
 
     const userId = await ensureUser(prisma, req);
@@ -324,6 +357,10 @@ export async function registerPaymentRoutes(app: FastifyInstance, prisma: Prisma
     if (invalidCause || !cause?.currency) {
       const error = invalidCause!;
       return reply.code(error.status).send({ error: { code: error.code, message: error.message } });
+    }
+    const invalidAmount = campaignAmountError(cause, parsed.data.amountCents);
+    if (invalidAmount) {
+      return reply.code(invalidAmount.status).send({ error: { code: invalidAmount.code, message: invalidAmount.message } });
     }
     const requiredCurrency = methodCurrency(parsed.data.method);
     if (cause.currency !== requiredCurrency) {
