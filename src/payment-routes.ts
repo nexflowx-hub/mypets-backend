@@ -68,6 +68,15 @@ const trackingFields = {
   medium: z.string().trim().max(120).nullable().optional(),
   campaign: z.string().trim().max(180).nullable().optional(),
   content: z.string().trim().max(180).nullable().optional(),
+  term: z.string().trim().max(180).nullable().optional(),
+  utmId: z.string().trim().max(180).nullable().optional(),
+  sourcePlatform: z.string().trim().max(120).nullable().optional(),
+  gclid: z.string().trim().max(300).nullable().optional(),
+  gbraid: z.string().trim().max(300).nullable().optional(),
+  wbraid: z.string().trim().max(300).nullable().optional(),
+  fbclid: z.string().trim().max(500).nullable().optional(),
+  msclkid: z.string().trim().max(300).nullable().optional(),
+  ttclid: z.string().trim().max(500).nullable().optional(),
   refCode: z.string().trim().max(120).nullable().optional(),
   landingPath: z.string().trim().max(500).nullable().optional(),
   rewardKeys: z.array(z.string().trim().min(1).max(80)).max(10).optional(),
@@ -285,6 +294,15 @@ function baseMetadata(input: {
   medium?: string | null;
   campaign?: string | null;
   content?: string | null;
+  term?: string | null;
+  utmId?: string | null;
+  sourcePlatform?: string | null;
+  gclid?: string | null;
+  gbraid?: string | null;
+  wbraid?: string | null;
+  fbclid?: string | null;
+  msclkid?: string | null;
+  ttclid?: string | null;
   refCode?: string | null;
   landingPath?: string | null;
   amountCents?: number;
@@ -320,6 +338,15 @@ function baseMetadata(input: {
     medium: input.medium ?? null,
     campaign: input.campaign ?? null,
     content: input.content ?? null,
+    term: input.term ?? null,
+    utmId: input.utmId ?? null,
+    sourcePlatform: input.sourcePlatform ?? null,
+    gclid: input.gclid ?? null,
+    gbraid: input.gbraid ?? null,
+    wbraid: input.wbraid ?? null,
+    fbclid: input.fbclid ?? null,
+    msclkid: input.msclkid ?? null,
+    ttclid: input.ttclid ?? null,
     refCode: input.refCode ?? null,
     landingPath: input.landingPath ?? null,
     rewardKeys,
