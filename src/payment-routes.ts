@@ -125,10 +125,25 @@ function normalizedPhone(value: string | null | undefined, countryPrefix: "351" 
   return null;
 }
 
+function validCpfDigits(digits: string) {
+  if (digits.length !== 11 || /^(\d)\1{10}$/.test(digits)) return false;
+  const numbers = digits.split("").map(Number);
+  const digit = (length: number) => {
+    const sum = numbers.slice(0, length).reduce(
+      (total, number, index) => total + number * (length + 1 - index),
+      0,
+    );
+    const remainder = (sum * 10) % 11;
+    return remainder === 10 ? 0 : remainder;
+  };
+  return digit(9) === numbers[9] && digit(10) === numbers[10];
+}
+
 function normalizedDocument(value: string | null | undefined) {
   const digits = value?.replace(/\D/g, "") ?? "";
   if (![11, 14].includes(digits.length)) return null;
   if (/^(\d)\1+$/.test(digits)) return null;
+  if (digits.length === 11 && !validCpfDigits(digits)) return null;
   return digits;
 }
 
