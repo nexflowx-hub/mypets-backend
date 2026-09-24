@@ -54,6 +54,10 @@ jobs:
           script: |
             set -Eeuo pipefail
             cd /srv/apps/mypets/api
+            test -d .git
+            git fetch --prune origin main
+            git checkout main
+            git merge --ff-only origin/main
             bash deploy/growth-performance-v18.sh
 
       - name: Verify public production
