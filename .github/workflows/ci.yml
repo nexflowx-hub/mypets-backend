@@ -145,6 +145,33 @@ jobs:
           done
           [ "$ready" = "true" ] || { echo "API did not become ready" >&2; exit 1; }
 
+          psql "$DIRECT_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          insert into public.payment_intents (
+            id, cause_id, provider, provider_reference, payment_method,
+            amount_cents, currency, frequency, status, idempotency_key, metadata, succeeded_at
+          ) values
+          (
+            '7f650000-0000-4a11-8c01-000000000011'::uuid,
+            '9a7f1000-0000-4a11-8c01-000000000007'::uuid,
+            'XPAYMENTS', 'CI-EBOOK-TOPUP-1', 'pix',
+            2000, 'BRL', 'ONE_TIME', 'SUCCEEDED', 'ci-ebook-topup-1',
+            '{"rewardKeys":["cuidados-essenciais"],"foodKg":1,"campaignBaseAmountCents":1290,"extraSupportCents":710}'::jsonb,
+            now()
+          ),
+          (
+            '7f650000-0000-4a11-8c01-000000000012'::uuid,
+            '9a7f1000-0000-4a11-8c01-000000000007'::uuid,
+            'XPAYMENTS', 'CI-EBOOK-TOPUP-3', 'pix',
+            5000, 'BRL', 'ONE_TIME', 'SUCCEEDED', 'ci-ebook-topup-3',
+            '{"rewardKeys":["cuidados-essenciais","treino-gentil","rotina-alimentacao"],"foodKg":3,"campaignBaseAmountCents":3870,"extraSupportCents":1130}'::jsonb,
+            now()
+          );
+          SQL
+
+          curl -fsS --max-time 10 http://127.0.0.1:8081/v1/campaigns/ebook-racao/impact | tee /tmp/ebook-impact.json
+          jq -e '.data.confirmedKg == 4 and .data.confirmedContributions == 2 and .data.totalReceivedCents == 7000 and .data.extraSupportCents == 1840 and .data.goalKg == 100 and .data.progressPercent == 4' /tmp/ebook-impact.json >/dev/null
+          echo "Ebook impact accounting validated: top-ups do not inflate guaranteed kg"
+
           curl -fsS -X POST --max-time 10 http://127.0.0.1:8081/v1/cause-intake/readiness | tee /tmp/intake-readiness.json
           jq -e '.data.status == "ready" and .data.databaseRoundTrip == true and .data.rolledBack == true' /tmp/intake-readiness.json >/dev/null
 
