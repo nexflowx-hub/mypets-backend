@@ -1,0 +1,78 @@
+name: Deploy MyPets Growth v18
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/deploy-growth-v18.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mypets-growth-v18-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      DEPLOY_HOST: ${{ secrets.MYPETS_VPS_HOST || secrets.VPS_HOST || secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.MYPETS_VPS_USER || secrets.VPS_USER || secrets.SSH_USER }}
+      DEPLOY_KEY: ${{ secrets.MYPETS_VPS_SSH_KEY || secrets.VPS_SSH_KEY || secrets.SSH_PRIVATE_KEY }}
+      DEPLOY_PORT: ${{ secrets.MYPETS_VPS_PORT || secrets.VPS_PORT || '22' }}
+
+    steps:
+      - name: Check deploy credentials
+        id: preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${DEPLOY_HOST:-}" ] && [ -n "${DEPLOY_USER:-}" ] && [ -n "${DEPLOY_KEY:-}" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "Deployment credentials detected."
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No compatible VPS deploy secrets were detected. No production changes were made."
+            echo "::notice::Supported host secrets: MYPETS_VPS_HOST, VPS_HOST, DEPLOY_HOST."
+            echo "::notice::Supported user secrets: MYPETS_VPS_USER, VPS_USER, SSH_USER."
+            echo "::notice::Supported key secrets: MYPETS_VPS_SSH_KEY, VPS_SSH_KEY, SSH_PRIVATE_KEY."
+          fi
+
+      - name: Deploy guarded growth release
+        if: steps.preflight.outputs.ready == 'true'
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: ${{ env.DEPLOY_HOST }}
+          username: ${{ env.DEPLOY_USER }}
+          key: ${{ env.DEPLOY_KEY }}
+          port: ${{ env.DEPLOY_PORT }}
+          command_timeout: 15m
+          script_stop: true
+          script: |
+            set -Eeuo pipefail
+            cd /srv/apps/mypets/api
+            bash deploy/growth-performance-v18.sh
+
+      - name: Verify public production
+        if: steps.preflight.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --retry 10 --retry-delay 3 --retry-all-errors --max-time 20 -fsS https://api.mypets.lat/health | tee /tmp/health.json
+          jq -e '.status == "ok" and .database == "ok"' /tmp/health.json >/dev/null
+
+          curl --retry 10 --retry-delay 3 --retry-all-errors --max-time 20 -fsS https://api.mypets.lat/v1/config | tee /tmp/config.json
+          jq -e '.data.brand == "mypets" and .data.environment == "production"' /tmp/config.json >/dev/null
+
+          curl --retry 10 --retry-delay 3 --retry-all-errors --max-time 20 -fsS -X POST https://api.mypets.lat/v1/cause-intake/readiness | tee /tmp/readiness.json
+          jq -e '.data.status == "ready" and .data.databaseRoundTrip == true and .data.rolledBack == true' /tmp/readiness.json >/dev/null
+
+          echo "MyPets Growth v18 public verification passed."
+
+      - name: Deployment skipped safely
+        if: steps.preflight.outputs.ready != 'true'
+        run: |
+          echo "No deployment executed. Configure one supported host/user/key secret set and rerun this workflow manually."
