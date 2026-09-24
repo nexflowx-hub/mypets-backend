@@ -206,6 +206,7 @@ function campaignUnitPrice(cause: CausePaymentRow) {
 function campaignAmountError(cause: CausePaymentRow, amountCents: number, rewardKeys: string[] | undefined) {
   const unitPrice = campaignUnitPrice(cause);
   if (!unitPrice) return null;
+
   const keys = rewardKeys ?? [];
   const uniqueKeys = [...new Set(keys)];
   if (
@@ -221,6 +222,7 @@ function campaignAmountError(cause: CausePaymentRow, amountCents: number, reward
       message: "This campaign requires a valid ebook selection",
     };
   }
+
   const baseAmountCents = uniqueKeys.length * unitPrice;
   if (amountCents < baseAmountCents) {
     return {
@@ -503,30 +505,6 @@ export async function registerPaymentRoutes(app: FastifyInstance, prisma: Prisma
         coalesce(sum(
           case
             when coalesce(metadata->>'foodKg', '') ~ '^[0-9]+
-      from public.payment_intents
-      where cause_id = ${EBOOK_RACAO_CAUSE_ID}::uuid
-        and status = 'SUCCEEDED'
-    `;
-    const row = rows[0] ?? {
-      confirmed_kg: 0,
-      confirmed_contributions: 0,
-      total_received_cents: 0n,
-      extra_support_cents: 0n,
-    };
-    const goalKg = 100;
-    return {
-      data: {
-        confirmedKg: row.confirmed_kg,
-        confirmedContributions: row.confirmed_contributions,
-        totalReceivedCents: Number(row.total_received_cents),
-        extraSupportCents: Number(row.extra_support_cents),
-        goalKg,
-        progressPercent: Math.min(100, Math.round((row.confirmed_kg / goalKg) * 100)),
-      },
-    };
-  });
-
-  app.get("/v1/payments/:id", async (req, reply) => {
     const params = z.object({ id: z.string().uuid() }).safeParse(req.params);
     if (!params.success) return reply.code(400).send({ error: { code: "INVALID_ID", message: "Invalid payment intent id" } });
 
@@ -599,30 +577,6 @@ export async function registerPaymentRoutes(app: FastifyInstance, prisma: Prisma
         coalesce(sum(
           case
             when coalesce(metadata->>'extraSupportCents', '') ~ '^[0-9]+
-      from public.payment_intents
-      where cause_id = ${EBOOK_RACAO_CAUSE_ID}::uuid
-        and status = 'SUCCEEDED'
-    `;
-    const row = rows[0] ?? {
-      confirmed_kg: 0,
-      confirmed_contributions: 0,
-      total_received_cents: 0n,
-      extra_support_cents: 0n,
-    };
-    const goalKg = 100;
-    return {
-      data: {
-        confirmedKg: row.confirmed_kg,
-        confirmedContributions: row.confirmed_contributions,
-        totalReceivedCents: Number(row.total_received_cents),
-        extraSupportCents: Number(row.extra_support_cents),
-        goalKg,
-        progressPercent: Math.min(100, Math.round((row.confirmed_kg / goalKg) * 100)),
-      },
-    };
-  });
-
-  app.get("/v1/payments/:id", async (req, reply) => {
     const params = z.object({ id: z.string().uuid() }).safeParse(req.params);
     if (!params.success) return reply.code(400).send({ error: { code: "INVALID_ID", message: "Invalid payment intent id" } });
 
@@ -692,6 +646,7 @@ export async function registerPaymentRoutes(app: FastifyInstance, prisma: Prisma
       where cause_id = ${EBOOK_RACAO_CAUSE_ID}::uuid
         and status = 'SUCCEEDED'
     `;
+
     const row = rows[0] ?? {
       confirmed_kg: 0,
       confirmed_contributions: 0,
