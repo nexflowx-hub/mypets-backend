@@ -54,15 +54,6 @@ async function optionalUserId(req: { headers: { authorization?: string } }) {
   return user?.id ?? null;
 }
 
-const EBOOK_RACAO_CAUSE_ID = "9a7f1000-0000-4a11-8c01-000000000007";
-const EBOOK_REWARD_KEYS = new Set([
-  "cuidados-essenciais",
-  "filhote-primeiros-30-dias",
-  "treino-gentil",
-  "guia-das-racas",
-  "rotina-alimentacao",
-]);
-
 const trackingFields = {
   source: z.string().trim().max(120).nullable().optional(),
   medium: z.string().trim().max(120).nullable().optional(),
@@ -125,25 +116,10 @@ function normalizedPhone(value: string | null | undefined, countryPrefix: "351" 
   return null;
 }
 
-function validCpfDigits(digits: string) {
-  if (digits.length !== 11 || /^(\d)\1{10}$/.test(digits)) return false;
-  const numbers = digits.split("").map(Number);
-  const digit = (length: number) => {
-    const sum = numbers.slice(0, length).reduce(
-      (total, number, index) => total + number * (length + 1 - index),
-      0,
-    );
-    const remainder = (sum * 10) % 11;
-    return remainder === 10 ? 0 : remainder;
-  };
-  return digit(9) === numbers[9] && digit(10) === numbers[10];
-}
-
 function normalizedDocument(value: string | null | undefined) {
   const digits = value?.replace(/\D/g, "") ?? "";
   if (![11, 14].includes(digits.length)) return null;
   if (/^(\d)\1+$/.test(digits)) return null;
-  if (digits.length === 11 && !validCpfDigits(digits)) return null;
   return digits;
 }
 
@@ -203,32 +179,14 @@ function campaignUnitPrice(cause: CausePaymentRow) {
   return Number.isInteger(value) && value >= 100 ? value : null;
 }
 
-function campaignAmountError(cause: CausePaymentRow, amountCents: number, rewardKeys: string[] | undefined) {
+function campaignAmountError(cause: CausePaymentRow, amountCents: number) {
   const unitPrice = campaignUnitPrice(cause);
   if (!unitPrice) return null;
-
-  const keys = rewardKeys ?? [];
-  const uniqueKeys = [...new Set(keys)];
-  if (
-    cause.fund_code !== "EBOOK_RACAO" ||
-    uniqueKeys.length < 1 ||
-    uniqueKeys.length > 5 ||
-    uniqueKeys.length !== keys.length ||
-    uniqueKeys.some((key) => !EBOOK_REWARD_KEYS.has(key))
-  ) {
+  if (amountCents < unitPrice || amountCents % unitPrice !== 0) {
     return {
       status: 409,
-      code: "INVALID_CAMPAIGN_REWARDS",
-      message: "This campaign requires a valid ebook selection",
-    };
-  }
-
-  const baseAmountCents = uniqueKeys.length * unitPrice;
-  if (amountCents < baseAmountCents) {
-    return {
-      status: 409,
-      code: "INVALID_CAMPAIGN_AMOUNT",
-      message: `This campaign requires at least ${baseAmountCents} cents for the selected rewards`,
+      code: "INVALID_CAMPAIGN_UNIT_AMOUNT",
+      message: `This campaign requires exact units of ${unitPrice} cents`,
     };
   }
   return null;
@@ -291,18 +249,7 @@ function baseMetadata(input: {
   rewardKeys?: string[];
 }) {
   const unitPriceCents = campaignUnitPrice(input.cause);
-  const rewardKeys = [...new Set(input.rewardKeys ?? [])];
-  const unitCount = input.cause.fund_code === "EBOOK_RACAO"
-    ? rewardKeys.length
-    : unitPriceCents && input.amountCents
-      ? input.amountCents / unitPriceCents
-      : null;
-  const campaignBaseAmountCents = input.cause.fund_code === "EBOOK_RACAO" && unitPriceCents
-    ? rewardKeys.length * unitPriceCents
-    : null;
-  const extraSupportCents = campaignBaseAmountCents != null && input.amountCents
-    ? Math.max(0, input.amountCents - campaignBaseAmountCents)
-    : 0;
+  const unitCount = unitPriceCents && input.amountCents ? input.amountCents / unitPriceCents : null;
   return {
     mypetsIntentId: input.intentId,
     causeId: input.cause.id,
@@ -311,8 +258,6 @@ function baseMetadata(input: {
     fundCode: input.cause.fund_code,
     campaignUnitPriceCents: unitPriceCents,
     campaignUnitCount: unitCount,
-    campaignBaseAmountCents,
-    extraSupportCents,
     foodKg: input.cause.fund_code === "EBOOK_RACAO" ? unitCount : null,
     targetType: "CAUSE",
     frequency: "ONE_TIME",
@@ -322,7 +267,7 @@ function baseMetadata(input: {
     content: input.content ?? null,
     refCode: input.refCode ?? null,
     landingPath: input.landingPath ?? null,
-    rewardKeys,
+    rewardKeys: input.rewardKeys ?? [],
     returnUrl: `${process.env.PUBLIC_SITE_URL ?? "https://mypets.lat"}/causas/${input.cause.slug}`,
   };
 }
@@ -342,7 +287,7 @@ export async function registerPaymentRoutes(app: FastifyInstance, prisma: Prisma
       const error = invalidCause!;
       return reply.code(error.status).send({ error: { code: error.code, message: error.message } });
     }
-    const invalidAmount = campaignAmountError(cause, parsed.data.amountCents, parsed.data.rewardKeys);
+    const invalidAmount = campaignAmountError(cause, parsed.data.amountCents);
     if (invalidAmount) {
       return reply.code(invalidAmount.status).send({ error: { code: invalidAmount.code, message: invalidAmount.message } });
     }
@@ -419,7 +364,7 @@ export async function registerPaymentRoutes(app: FastifyInstance, prisma: Prisma
       const error = invalidCause!;
       return reply.code(error.status).send({ error: { code: error.code, message: error.message } });
     }
-    const invalidAmount = campaignAmountError(cause, parsed.data.amountCents, parsed.data.rewardKeys);
+    const invalidAmount = campaignAmountError(cause, parsed.data.amountCents);
     if (invalidAmount) {
       return reply.code(invalidAmount.status).send({ error: { code: invalidAmount.code, message: invalidAmount.message } });
     }
@@ -492,178 +437,6 @@ export async function registerPaymentRoutes(app: FastifyInstance, prisma: Prisma
       await prisma.$executeRaw`update public.payment_intents set status = 'FAILED', updated_at = now() where id = ${intentId}::uuid`;
       return reply.code(502).send({ error: { code: "XPAYMENTS_NATIVE_FAILED", message: "Could not create the selected payment method" } });
     }
-  });
-
-  app.get("/v1/campaigns/ebook-racao/impact", async () => {
-    const rows = await prisma.$queryRaw<Array<{
-      confirmed_kg: number;
-      confirmed_contributions: number;
-      total_received_cents: bigint;
-      extra_support_cents: bigint;
-    }>>`
-      select
-        coalesce(sum(
-          case
-            when coalesce(metadata->>'foodKg', '') ~ '^[0-9]+
-    const params = z.object({ id: z.string().uuid() }).safeParse(req.params);
-    if (!params.success) return reply.code(400).send({ error: { code: "INVALID_ID", message: "Invalid payment intent id" } });
-
-    const rows = await prisma.$queryRaw<IntentRow[]>`
-      select id, cause_id, provider_session_id, provider_transaction_id, provider_reference, payment_method,
-             amount_cents, currency, status, checkout_url, metadata, created_at, updated_at
-      from public.payment_intents where id = ${params.data.id}::uuid limit 1
-    `;
-    let intent = rows[0];
-    if (!intent) return reply.code(404).send({ error: { code: "NOT_FOUND", message: "Payment intent not found" } });
-
-    if (intent.provider_session_id && ["PENDING", "PROCESSING"].includes(intent.status)) {
-      try {
-        const session = await getXPaymentsSession(intent.provider_session_id, intent.currency);
-        const providerStatus = normalizeXPaymentsStatus(session.status ?? (session.metadata as Record<string, unknown> | undefined)?.checkoutStatus);
-        if (providerStatus && providerStatus !== intent.status) {
-          if (providerStatus === "SUCCEEDED") {
-            const updated = await markSucceeded(prisma, intent);
-            if (updated) intent = updated;
-          } else {
-            const updated = await prisma.$queryRaw<IntentRow[]>`
-              update public.payment_intents set status = ${providerStatus}, updated_at = now()
-              where id = ${intent.id}::uuid and status <> 'SUCCEEDED'
-              returning id, cause_id, provider_session_id, provider_transaction_id, provider_reference, payment_method,
-                        amount_cents, currency, status, checkout_url, metadata, created_at, updated_at
-            `;
-            if (updated[0]) intent = updated[0];
-          }
-        }
-      } catch (error) {
-        app.log.warn({ err: error, intentId: intent.id }, "XPAYMENTS status reconciliation unavailable");
-      }
-    }
-
-    if (intent.provider_transaction_id && ["PENDING", "PROCESSING"].includes(intent.status)) {
-      try {
-        const transaction = await getXPaymentsNativeTransaction(intent.provider_transaction_id, intent.currency);
-        const providerStatus = normalizeXPaymentsStatus(transaction.status);
-        if (providerStatus && providerStatus !== intent.status) {
-          if (providerStatus === "SUCCEEDED") {
-            const updated = await markSucceeded(prisma, intent);
-            if (updated) intent = updated;
-          } else {
-            const updated = await prisma.$queryRaw<IntentRow[]>`
-              update public.payment_intents set status = ${providerStatus}, updated_at = now()
-              where id = ${intent.id}::uuid and status <> 'SUCCEEDED'
-              returning id, cause_id, provider_session_id, provider_transaction_id, provider_reference, payment_method,
-                        amount_cents, currency, status, checkout_url, metadata, created_at, updated_at
-            `;
-            if (updated[0]) intent = updated[0];
-          }
-        }
-      } catch (error) {
-        app.log.warn({ err: error, intentId: intent.id, providerTransactionId: intent.provider_transaction_id }, "XPAYMENTS Native status reconciliation unavailable");
-      }
-    }
-
-    return { data: publicIntent(intent) };
-  });
-}
-
-              then (metadata->>'foodKg')::int
-            when jsonb_typeof(metadata->'rewardKeys') = 'array'
-              then jsonb_array_length(metadata->'rewardKeys')
-            else 0
-          end
-        ), 0)::int as confirmed_kg,
-        count(*)::int as confirmed_contributions,
-        coalesce(sum(amount_cents), 0)::bigint as total_received_cents,
-        coalesce(sum(
-          case
-            when coalesce(metadata->>'extraSupportCents', '') ~ '^[0-9]+
-    const params = z.object({ id: z.string().uuid() }).safeParse(req.params);
-    if (!params.success) return reply.code(400).send({ error: { code: "INVALID_ID", message: "Invalid payment intent id" } });
-
-    const rows = await prisma.$queryRaw<IntentRow[]>`
-      select id, cause_id, provider_session_id, provider_transaction_id, provider_reference, payment_method,
-             amount_cents, currency, status, checkout_url, metadata, created_at, updated_at
-      from public.payment_intents where id = ${params.data.id}::uuid limit 1
-    `;
-    let intent = rows[0];
-    if (!intent) return reply.code(404).send({ error: { code: "NOT_FOUND", message: "Payment intent not found" } });
-
-    if (intent.provider_session_id && ["PENDING", "PROCESSING"].includes(intent.status)) {
-      try {
-        const session = await getXPaymentsSession(intent.provider_session_id, intent.currency);
-        const providerStatus = normalizeXPaymentsStatus(session.status ?? (session.metadata as Record<string, unknown> | undefined)?.checkoutStatus);
-        if (providerStatus && providerStatus !== intent.status) {
-          if (providerStatus === "SUCCEEDED") {
-            const updated = await markSucceeded(prisma, intent);
-            if (updated) intent = updated;
-          } else {
-            const updated = await prisma.$queryRaw<IntentRow[]>`
-              update public.payment_intents set status = ${providerStatus}, updated_at = now()
-              where id = ${intent.id}::uuid and status <> 'SUCCEEDED'
-              returning id, cause_id, provider_session_id, provider_transaction_id, provider_reference, payment_method,
-                        amount_cents, currency, status, checkout_url, metadata, created_at, updated_at
-            `;
-            if (updated[0]) intent = updated[0];
-          }
-        }
-      } catch (error) {
-        app.log.warn({ err: error, intentId: intent.id }, "XPAYMENTS status reconciliation unavailable");
-      }
-    }
-
-    if (intent.provider_transaction_id && ["PENDING", "PROCESSING"].includes(intent.status)) {
-      try {
-        const transaction = await getXPaymentsNativeTransaction(intent.provider_transaction_id, intent.currency);
-        const providerStatus = normalizeXPaymentsStatus(transaction.status);
-        if (providerStatus && providerStatus !== intent.status) {
-          if (providerStatus === "SUCCEEDED") {
-            const updated = await markSucceeded(prisma, intent);
-            if (updated) intent = updated;
-          } else {
-            const updated = await prisma.$queryRaw<IntentRow[]>`
-              update public.payment_intents set status = ${providerStatus}, updated_at = now()
-              where id = ${intent.id}::uuid and status <> 'SUCCEEDED'
-              returning id, cause_id, provider_session_id, provider_transaction_id, provider_reference, payment_method,
-                        amount_cents, currency, status, checkout_url, metadata, created_at, updated_at
-            `;
-            if (updated[0]) intent = updated[0];
-          }
-        }
-      } catch (error) {
-        app.log.warn({ err: error, intentId: intent.id, providerTransactionId: intent.provider_transaction_id }, "XPAYMENTS Native status reconciliation unavailable");
-      }
-    }
-
-    return { data: publicIntent(intent) };
-  });
-}
-
-              then (metadata->>'extraSupportCents')::bigint
-            else 0
-          end
-        ), 0)::bigint as extra_support_cents
-      from public.payment_intents
-      where cause_id = ${EBOOK_RACAO_CAUSE_ID}::uuid
-        and status = 'SUCCEEDED'
-    `;
-
-    const row = rows[0] ?? {
-      confirmed_kg: 0,
-      confirmed_contributions: 0,
-      total_received_cents: 0n,
-      extra_support_cents: 0n,
-    };
-    const goalKg = 100;
-    return {
-      data: {
-        confirmedKg: row.confirmed_kg,
-        confirmedContributions: row.confirmed_contributions,
-        totalReceivedCents: Number(row.total_received_cents),
-        extraSupportCents: Number(row.extra_support_cents),
-        goalKg,
-        progressPercent: Math.min(100, Math.round((row.confirmed_kg / goalKg) * 100)),
-      },
-    };
   });
 
   app.get("/v1/payments/:id", async (req, reply) => {
