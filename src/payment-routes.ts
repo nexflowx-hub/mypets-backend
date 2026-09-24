@@ -494,6 +494,54 @@ export async function registerPaymentRoutes(app: FastifyInstance, prisma: Prisma
     }
   });
 
+  app.get("/v1/campaigns/ebook-racao/impact", async () => {
+    const rows = await prisma.$queryRaw<Array<{
+      confirmed_kg: number;
+      confirmed_contributions: number;
+      total_received_cents: bigint;
+      extra_support_cents: bigint;
+    }>>`
+      select
+        coalesce(sum(
+          case
+            when jsonb_typeof(metadata->'rewardKeys') = 'array'
+              then jsonb_array_length(metadata->'rewardKeys')
+            else 0
+          end
+        ), 0)::int as confirmed_kg,
+        count(*)::int as confirmed_contributions,
+        coalesce(sum(amount_cents), 0)::bigint as total_received_cents,
+        coalesce(sum(
+          case
+            when metadata ? 'extraSupportCents'
+              then (metadata->>'extraSupportCents')::bigint
+            else 0
+          end
+        ), 0)::bigint as extra_support_cents
+      from public.payment_intents
+      where cause_id = ${EBOOK_RACAO_CAUSE_ID}::uuid
+        and status = 'SUCCEEDED'
+    `;
+
+    const row = rows[0] ?? {
+      confirmed_kg: 0,
+      confirmed_contributions: 0,
+      total_received_cents: 0n,
+      extra_support_cents: 0n,
+    };
+    const goalKg = 100;
+    return {
+      data: {
+        confirmedKg: row.confirmed_kg,
+        confirmedContributions: row.confirmed_contributions,
+        totalReceivedCents: Number(row.total_received_cents),
+        extraSupportCents: Number(row.extra_support_cents),
+        goalKg,
+        progressPercent: Math.min(100, Math.round((row.confirmed_kg / goalKg) * 100)),
+      },
+    };
+  });
+
   app.get("/v1/payments/:id", async (req, reply) => {
     const params = z.object({ id: z.string().uuid() }).safeParse(req.params);
     if (!params.success) return reply.code(400).send({ error: { code: "INVALID_ID", message: "Invalid payment intent id" } });
