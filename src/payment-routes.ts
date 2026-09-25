@@ -55,13 +55,30 @@ async function optionalUserId(req: { headers: { authorization?: string } }) {
 }
 
 const EBOOK_RACAO_CAUSE_ID = "9a7f1000-0000-4a11-8c01-000000000007";
+const EBOOK_REWARD_ALIASES: Record<string, string> = {
+  "filhote-primeiros-30-dias": "primeiros-30-dias",
+  "rotina-alimentacao": "alimentacao-bem-estar",
+};
+
 const EBOOK_REWARD_KEYS = new Set([
   "cuidados-essenciais",
-  "filhote-primeiros-30-dias",
+  "primeiros-30-dias",
   "treino-gentil",
   "guia-das-racas",
-  "rotina-alimentacao",
+  "alimentacao-bem-estar",
+  "linguagem-corporal-canina",
+  "passeios-sem-stress",
+  "ficar-sozinho",
+  "cao-em-apartamento",
+  "higiene-saude-oral",
+  "adotei-cao-adulto",
+  "caes-e-criancas",
+  "50-ideias-enriquecimento",
 ]);
+
+function canonicalRewardKeys(keys: string[] | undefined) {
+  return [...new Set((keys ?? []).map((key) => EBOOK_REWARD_ALIASES[key] ?? key))];
+}
 
 const trackingFields = {
   source: z.string().trim().max(120).nullable().optional(),
@@ -79,7 +96,7 @@ const trackingFields = {
   ttclid: z.string().trim().max(500).nullable().optional(),
   refCode: z.string().trim().max(120).nullable().optional(),
   landingPath: z.string().trim().max(500).nullable().optional(),
-  rewardKeys: z.array(z.string().trim().min(1).max(80)).max(10).optional(),
+  rewardKeys: z.array(z.string().trim().min(1).max(80)).max(13).optional(),
 };
 
 const checkoutSchema = z.object({
@@ -119,7 +136,7 @@ function publicIntent(row: IntentRow) {
     status: row.status,
     action: metadata.nativeAction ?? null,
     rewardKeys: row.status === "SUCCEEDED" && Array.isArray(metadata.rewardKeys)
-      ? metadata.rewardKeys.filter((value): value is string => typeof value === "string").slice(0, 10)
+      ? metadata.rewardKeys.filter((value): value is string => typeof value === "string").slice(0, 13)
       : [],
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -217,11 +234,11 @@ function campaignAmountError(cause: CausePaymentRow, amountCents: number, reward
   if (!unitPrice) return null;
 
   const keys = rewardKeys ?? [];
-  const uniqueKeys = [...new Set(keys)];
+  const uniqueKeys = canonicalRewardKeys(keys);
   if (
     cause.fund_code !== "EBOOK_RACAO" ||
     uniqueKeys.length < 1 ||
-    uniqueKeys.length > 5 ||
+    uniqueKeys.length > 13 ||
     uniqueKeys.length !== keys.length ||
     uniqueKeys.some((key) => !EBOOK_REWARD_KEYS.has(key))
   ) {
@@ -309,7 +326,7 @@ function baseMetadata(input: {
   rewardKeys?: string[];
 }) {
   const unitPriceCents = campaignUnitPrice(input.cause);
-  const rewardKeys = [...new Set(input.rewardKeys ?? [])];
+  const rewardKeys = canonicalRewardKeys(input.rewardKeys);
   const unitCount = input.cause.fund_code === "EBOOK_RACAO"
     ? rewardKeys.length
     : unitPriceCents && input.amountCents
