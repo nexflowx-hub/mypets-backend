@@ -96,6 +96,7 @@ printf '%s' "$IMPACT" | grep -q '"goalKg":100' || fail "Impact endpoint goal is 
 READINESS="$(curl -fsS https://api.mypets.lat/v1/campaigns/ebook-racao/readiness)"
 echo "$READINESS"
 printf '%s' "$READINESS" | grep -q '"technicalReady":true' || fail "Paid-traffic technical readiness is not true"
+printf '%s' "$READINESS" | grep -q '"library13Entitlements":true' || fail "Production backend does not expose the 13-guide entitlement whitelist"
 
 PAYMENTS_LIVE_AFTER="$(sed -n 's/^PAYMENTS_LIVE=//p' "$ENV_FILE" | tail -1)"
 PAYOUTS_ENABLED_AFTER="$(sed -n 's/^PAYOUTS_ENABLED=//p' "$ENV_FILE" | tail -1)"
@@ -110,6 +111,7 @@ echo "Top-up accounting: OK"
 echo "Paid-media attribution persistence: OK"
 echo "Public impact endpoint: OK"
 echo "Paid-traffic technical readiness: OK"
+echo "Library 13 entitlement whitelist: OK"
 echo 'Live payment proof: inspect /v1/campaigns/ebook-racao/readiness after a real R$12,90 Pix'
 echo "API health: OK"
 echo "No payment secret or payout setting was changed."
