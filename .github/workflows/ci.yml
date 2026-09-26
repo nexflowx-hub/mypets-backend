@@ -176,7 +176,7 @@ jobs:
           echo "Ebook impact accounting validated: top-ups do not inflate guaranteed kg"
 
           curl -fsS --max-time 10 http://127.0.0.1:8081/v1/campaigns/ebook-racao/readiness | tee /tmp/ebook-readiness.json
-          jq -e '.data.status == "not_ready" and .data.technicalReady == false and .data.livePaymentProof == true and .data.checks.fundActive == true and .data.checks.unitPrice == true and .data.checks.goal == true and .data.checks.paidAttribution == true and .data.checks.paymentsLive == false' /tmp/ebook-readiness.json >/dev/null
+          jq -e '.data.status == "not_ready" and .data.technicalReady == false and .data.livePaymentProof == true and .data.checks.fundActive == true and .data.checks.unitPrice == true and .data.checks.goal == true and .data.checks.paidAttribution == true and .data.checks.library13Entitlements == true and .data.checks.paymentsLive == false' /tmp/ebook-readiness.json >/dev/null
           echo "Ebook paid-traffic readiness endpoint validated in safe CI mode"
 
           curl -fsS -X POST --max-time 10 http://127.0.0.1:8081/v1/cause-intake/readiness | tee /tmp/intake-readiness.json

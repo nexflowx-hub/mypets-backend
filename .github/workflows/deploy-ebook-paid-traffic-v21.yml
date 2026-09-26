@@ -71,6 +71,6 @@ jobs:
           jq -e '.data.confirmedKg >= 0 and .data.confirmedContributions >= 0 and .data.extraSupportCents >= 0 and .data.goalKg == 100' /tmp/impact.json >/dev/null
 
           curl --retry 10 --retry-delay 3 --retry-all-errors --max-time 20 -fsS https://api.mypets.lat/v1/campaigns/ebook-racao/readiness | tee /tmp/paid-readiness.json
-          jq -e '.data.technicalReady == true and .data.checks.paymentsLive == true and .data.checks.provider == true and .data.checks.brlEnabled == true and .data.checks.pixEnabled == true and .data.checks.fundActive == true and .data.checks.unitPrice == true and .data.checks.goal == true and .data.checks.paidAttribution == true' /tmp/paid-readiness.json >/dev/null
+          jq -e '.data.technicalReady == true and .data.checks.paymentsLive == true and .data.checks.provider == true and .data.checks.brlEnabled == true and .data.checks.pixEnabled == true and .data.checks.fundActive == true and .data.checks.unitPrice == true and .data.checks.goal == true and .data.checks.paidAttribution == true and .data.checks.library13Entitlements == true' /tmp/paid-readiness.json >/dev/null
 
           echo "MyPets eBook paid-traffic v21 production verification passed."
