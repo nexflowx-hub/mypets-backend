@@ -586,6 +586,7 @@ export async function registerPaymentRoutes(app: FastifyInstance, prisma: Prisma
       unitPrice: unitPriceCents === 1290,
       goal: goalKg === 100,
       paidAttribution: attributionRows[0]?.ready === true,
+      library13Entitlements: EBOOK_REWARD_KEYS.size === 13,
     };
     const technicalReady = Object.values(checks).every(Boolean);
     const livePaymentProof = Boolean(latest && rewardKeys.length >= 1);
