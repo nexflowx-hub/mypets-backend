@@ -83,6 +83,17 @@ done
 [ "$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$API_CONTAINER")" = "healthy" ] || fail "MyPets API did not become healthy"
 
 log "Reconciling recent pending eBook Pix payments against XPAYMENTS"
+echo "MyPets BRL XPAYMENTS key fingerprint:"
+docker exec "$API_CONTAINER" node --input-type=module -e '
+  const crypto = await import("node:crypto");
+  const key = String(process.env.XPAYMENTS_API_KEY_BRL ?? "").trim();
+  const store = String(process.env.XPAYMENTS_STORE_CODE_BRL ?? "").trim();
+  console.log(JSON.stringify({
+    configured: Boolean(key),
+    storeCode: store,
+    keyFingerprint: key ? crypto.createHash("sha256").update(key).digest("hex").slice(0, 16) : null
+  }));
+'
 DB_URL="$(sed -n 's/^DIRECT_URL=//p' "$ENV_FILE" | tail -1)"
 [ -n "$DB_URL" ] || fail "DIRECT_URL is missing"
 PENDING_PAYMENT_IDS="$(
