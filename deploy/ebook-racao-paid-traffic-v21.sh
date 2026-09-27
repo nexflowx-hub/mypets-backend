@@ -104,8 +104,17 @@ if [ -n "$PENDING_PAYMENT_IDS" ]; then
   while IFS= read -r payment_id; do
     [ -n "$payment_id" ] || continue
     echo "Reconciling payment intent $payment_id"
-    curl --retry 3 --retry-delay 2 --retry-all-errors --max-time 20 -fsS       "https://api.mypets.lat/v1/payments/$payment_id" || true
-    echo
+    RECONCILE_RESPONSE="$(
+      curl --retry 3 --retry-delay 2 --retry-all-errors --max-time 20 -fsS \
+        "https://api.mypets.lat/v1/payments/$payment_id" || true
+    )"
+    echo "$RECONCILE_RESPONSE"
+    if printf '%s' "$RECONCILE_RESPONSE" | grep -q '"status":"PENDING"'; then
+      echo "Payment remained PENDING; showing recent non-secret XPAYMENTS reconciliation diagnostics:"
+      docker logs --since 2m "$API_CONTAINER" 2>&1 \
+        | grep -E 'XPAYMENTS (Native status reconciliation unavailable|status reconciliation unavailable|webhook reconciled|transaction lookup)' \
+        | tail -n 30 || true
+    fi
   done <<< "$PENDING_PAYMENT_IDS"
 else
   echo "No recent pending eBook payments to reconcile."
