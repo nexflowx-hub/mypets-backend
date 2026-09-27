@@ -259,7 +259,15 @@ export async function getXPaymentsNativeTransaction(transactionId: string, curre
         cache: "no-store",
       });
 
-      if (!response.ok) throw new Error(`XPAYMENTS transaction lookup failed (${response.status})`);
+      if (!response.ok) {
+        const payload = await responsePayload(response);
+        const errorRecord = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+        const nestedError = errorRecord.error && typeof errorRecord.error === "object"
+          ? errorRecord.error as Record<string, unknown>
+          : {};
+        const safeCode = String(nestedError.code ?? errorRecord.code ?? "").replace(/[^A-Z0-9_-]/gi, "").slice(0, 80);
+        throw new Error(`XPAYMENTS transaction lookup failed (${response.status}${safeCode ? `:${safeCode}` : ""})`);
+      }
       const parsed = nativeTransactionStatusResponse.safeParse(await responsePayload(response));
       if (!parsed.success || parsed.data.success === false) throw new Error("XPAYMENTS returned an invalid Native transaction status");
       if (parsed.data.data.storeCode !== storeCode) throw new Error(`XPAYMENTS Store mismatch: expected ${storeCode}`);
