@@ -87,7 +87,7 @@ DB_URL="$(sed -n 's/^DIRECT_URL=//p' "$ENV_FILE" | tail -1)"
 [ -n "$DB_URL" ] || fail "DIRECT_URL is missing"
 PENDING_PAYMENT_IDS="$(
   docker run --rm -i -e DIRECT_URL="$DB_URL" postgres:16-alpine sh -ec 'psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -At' <<'SQL'
-select id
+select concat_ws('|', id::text, provider_transaction_id, currency)
 from public.payment_intents
 where cause_id = '9a7f1000-0000-4a11-8c01-000000000007'::uuid
   and status in ('PENDING', 'PROCESSING')
@@ -101,9 +101,31 @@ SQL
 unset DB_URL
 
 if [ -n "$PENDING_PAYMENT_IDS" ]; then
-  while IFS= read -r payment_id; do
+  while IFS='|' read -r payment_id provider_transaction_id payment_currency; do
     [ -n "$payment_id" ] || continue
-    echo "Reconciling payment intent $payment_id"
+    echo "Reconciling payment intent $payment_id (provider transaction $provider_transaction_id)"
+    echo "Direct XPAYMENTS S2S diagnostic:"
+    docker exec "$API_CONTAINER" node --input-type=module -e '
+      const { getXPaymentsNativeTransaction } = await import("./dist/payments/xpayments.js");
+      const [transactionId, currency] = process.argv.slice(1);
+      try {
+        const data = await getXPaymentsNativeTransaction(transactionId, currency);
+        console.log(JSON.stringify({
+          ok: true,
+          transactionId: data.transactionId,
+          reference: data.reference,
+          status: data.status,
+          amount: data.amount ?? null,
+          currency: data.currency,
+          storeCode: data.storeCode
+        }));
+      } catch (error) {
+        console.log(JSON.stringify({
+          ok: false,
+          error: error instanceof Error ? error.message : "XPAYMENTS transaction lookup failed"
+        }));
+      }
+    ' "$provider_transaction_id" "$payment_currency" || true
     RECONCILE_RESPONSE="$(
       curl --retry 3 --retry-delay 2 --retry-all-errors --max-time 20 -fsS \
         "https://api.mypets.lat/v1/payments/$payment_id" || true
