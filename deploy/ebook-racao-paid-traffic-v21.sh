@@ -82,6 +82,35 @@ for _ in $(seq 1 45); do
 done
 [ "$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$API_CONTAINER")" = "healthy" ] || fail "MyPets API did not become healthy"
 
+log "Reconciling recent pending eBook Pix payments against XPAYMENTS"
+DB_URL="$(sed -n 's/^DIRECT_URL=//p' "$ENV_FILE" | tail -1)"
+[ -n "$DB_URL" ] || fail "DIRECT_URL is missing"
+PENDING_PAYMENT_IDS="$(
+  docker run --rm -i -e DIRECT_URL="$DB_URL" postgres:16-alpine sh -ec 'psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -At' <<'SQL'
+select id
+from public.payment_intents
+where cause_id = '9a7f1000-0000-4a11-8c01-000000000007'::uuid
+  and status in ('PENDING', 'PROCESSING')
+  and provider = 'XPAYMENTS'
+  and provider_transaction_id is not null
+  and created_at >= now() - interval '7 days'
+order by created_at desc
+limit 20;
+SQL
+)"
+unset DB_URL
+
+if [ -n "$PENDING_PAYMENT_IDS" ]; then
+  while IFS= read -r payment_id; do
+    [ -n "$payment_id" ] || continue
+    echo "Reconciling payment intent $payment_id"
+    curl --retry 3 --retry-delay 2 --retry-all-errors --max-time 20 -fsS       "https://api.mypets.lat/v1/payments/$payment_id" || true
+    echo
+  done <<< "$PENDING_PAYMENT_IDS"
+else
+  echo "No recent pending eBook payments to reconcile."
+fi
+
 log "Verifying public campaign endpoints"
 curl -fsS https://api.mypets.lat/health
 echo
