@@ -4,6 +4,11 @@ import type { FastifyInstance, FastifyReply, FastifyRequest, RouteShorthandOptio
 import type { PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import { emitInternalAlert } from "./internal-alerts.js";
+import {
+  getXPaymentsNativeTransaction,
+  normalizeXPaymentsStatus,
+  xpaymentsAllowWebhooklessLive,
+} from "./payments/xpayments.js";
 
 const webhookSchema = z.object({
   event: z.string().min(1).max(160),
@@ -122,20 +127,23 @@ function webhookHandler(app: FastifyInstance, prisma: PrismaClient, mode: Webhoo
 
     const currency = parsed.data.currency.toUpperCase();
     const secret = webhookSecret(currency, sandbox);
-    if (!secret) {
-      app.log.error({ currency, sandbox }, "XPAYMENTS webhook secret is not configured");
-      return reply.code(503).send({ error: { code: "WEBHOOK_NOT_CONFIGURED", message: "Webhook verification is not configured" } });
-    }
-
     const rawBody = (req as RawBodyRequest).rawBody ?? "";
     if (!rawBody) {
       app.log.error({ currency, sandbox }, "XPAYMENTS webhook raw body was not captured");
       return reply.code(400).send({ error: { code: "RAW_BODY_REQUIRED", message: "Webhook raw body is required" } });
     }
+
     const signature = String(req.headers["x-nexflowx-signature"] ?? "");
-    if (!validSignature(rawBody, signature, secret)) {
+    const signatureValid = Boolean(secret && validSignature(rawBody, signature, secret));
+    const providerReconciliationAllowed = !sandbox && !secret && xpaymentsAllowWebhooklessLive();
+
+    if (secret && !signatureValid) {
       app.log.warn({ currency, sandbox }, "Rejected XPAYMENTS webhook with invalid signature");
       return reply.code(401).send({ error: { code: "INVALID_SIGNATURE", message: "Invalid webhook signature" } });
+    }
+    if (!secret && !providerReconciliationAllowed) {
+      app.log.error({ currency, sandbox }, "XPAYMENTS webhook secret is not configured and provider reconciliation is disabled");
+      return reply.code(503).send({ error: { code: "WEBHOOK_NOT_CONFIGURED", message: "Webhook verification is not configured" } });
     }
 
     const providerEventId = `${parsed.data.transaction_id}:${parsed.data.event}`;
@@ -143,7 +151,7 @@ function webhookHandler(app: FastifyInstance, prisma: PrismaClient, mode: Webhoo
       insert into public.payment_provider_events (
         provider, provider_event_id, event_type, signature_valid, payload, processing_status
       ) values (
-        'XPAYMENTS', ${providerEventId}, ${parsed.data.event}, true, ${JSON.stringify(parsed.data)}::jsonb, 'RECEIVED'
+        'XPAYMENTS', ${providerEventId}, ${parsed.data.event}, ${signatureValid}, ${JSON.stringify(parsed.data)}::jsonb, 'RECEIVED'
       ) on conflict (provider, provider_event_id) where provider_event_id is not null do nothing
     `;
 
@@ -192,7 +200,47 @@ function webhookHandler(app: FastifyInstance, prisma: PrismaClient, mode: Webhoo
       return reply.code(200).send({ received: true, ignored: true, reason: "amount_or_currency_mismatch" });
     }
 
-    const nextStatus = normalizeStatus(parsed.data.status, parsed.data.event);
+    let nextStatus = normalizeStatus(parsed.data.status, parsed.data.event);
+
+    if (!signatureValid) {
+      try {
+        const providerTransaction = await getXPaymentsNativeTransaction(parsed.data.transaction_id, intent.currency);
+        const providerAmountCents = providerTransaction.amount == null
+          ? null
+          : Math.round(Number(providerTransaction.amount) * 100);
+        const providerReferenceMatches = providerTransaction.reference === intent.provider_reference;
+        const providerAmountMatches = providerAmountCents == null || providerAmountCents === intent.amount_cents;
+        const providerStatus = normalizeXPaymentsStatus(providerTransaction.status);
+
+        if (!providerReferenceMatches || !providerAmountMatches || !providerStatus) {
+          await prisma.$executeRaw`
+            update public.payment_provider_events
+            set processing_status = 'FAILED', processed_at = now(), processing_error = 'provider_reconciliation_mismatch'
+            where provider = 'XPAYMENTS' and provider_event_id = ${providerEventId}
+          `;
+          app.log.error({
+            intentId: intent.id,
+            transactionId: parsed.data.transaction_id,
+            providerReferenceMatches,
+            providerAmountMatches,
+            providerStatus,
+          }, "Webhookless XPAYMENTS reconciliation did not match the MyPets intent");
+          return reply.code(200).send({ received: true, ignored: true, reason: "provider_reconciliation_mismatch" });
+        }
+
+        nextStatus = providerStatus;
+        app.log.info({ intentId: intent.id, transactionId: parsed.data.transaction_id, nextStatus }, "XPAYMENTS webhook reconciled server-to-server");
+      } catch (error) {
+        await prisma.$executeRaw`
+          update public.payment_provider_events
+          set processing_status = 'FAILED', processed_at = now(), processing_error = 'provider_reconciliation_unavailable'
+          where provider = 'XPAYMENTS' and provider_event_id = ${providerEventId}
+        `;
+        app.log.warn({ err: error, intentId: intent.id, transactionId: parsed.data.transaction_id }, "Webhookless XPAYMENTS reconciliation unavailable");
+        return reply.code(503).send({ error: { code: "PROVIDER_RECONCILIATION_UNAVAILABLE", message: "Provider reconciliation is temporarily unavailable" } });
+      }
+    }
+
     try {
       let newlySucceeded: IntentRow | null = null;
       if (nextStatus === "SUCCEEDED") {

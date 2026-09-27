@@ -35,6 +35,7 @@ const nativeTransactionStatusResponse = z.object({
     reference: z.string().min(1).max(240),
     status: z.string().min(1).max(80),
     method: z.string().nullable().optional(),
+    amount: z.union([z.number(), z.string()]).optional(),
     currency: z.string().length(3),
     storeCode: z.string().trim().min(2).max(120),
   }).passthrough(),
