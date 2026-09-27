@@ -173,6 +173,13 @@ function normalizedDocument(value: string | null | undefined) {
   return digits;
 }
 
+function normalizedBrazilPhone(value: string | null | undefined) {
+  let digits = value?.replace(/\D/g, "") ?? "";
+  if (digits.startsWith("55") && digits.length >= 12) digits = digits.slice(2);
+  if (![10, 11].includes(digits.length)) return null;
+  return `+55${digits}`;
+}
+
 function methodCurrency(method: NativePaymentMethod): PaymentCurrency {
   return method === "pix" ? "BRL" : "EUR";
 }
@@ -182,8 +189,9 @@ function methodCustomer(input: z.infer<typeof nativeSchema>) {
   const email = input.donorEmail?.trim().toLowerCase() || null;
   if (input.method === "pix") {
     const document = normalizedDocument(input.donorDocument);
+    const phone = normalizedBrazilPhone(input.donorPhone);
     if (!name || !document) return null;
-    return { name, email, phone: null, document };
+    return { name, email, phone, document };
   }
   if (input.method === "mb_way") {
     const phone = normalizedPhone(input.donorPhone, "351");
