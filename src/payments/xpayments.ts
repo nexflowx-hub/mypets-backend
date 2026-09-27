@@ -243,18 +243,34 @@ export async function getXPaymentsNativeTransaction(transactionId: string, curre
   if (!apiKey || !storeCode) throw new Error(`XPAYMENTS ${currency} Store is not configured`);
   assertEnvironmentSafe(currency, apiKey, storeCode);
 
-  const response = await fetch(`${apiBase()}/payments/transactions/${encodeURIComponent(transactionId)}`, {
-    headers: { Authorization: `Bearer ${apiKey}` },
-    signal: AbortSignal.timeout(8_000),
-    cache: "no-store",
-  });
+  let lastError: Error | null = null;
+  const retryDelaysMs = [0, 350, 900, 1_800];
 
-  if (!response.ok) throw new Error(`XPAYMENTS transaction lookup failed (${response.status})`);
-  const parsed = nativeTransactionStatusResponse.safeParse(await responsePayload(response));
-  if (!parsed.success || parsed.data.success === false) throw new Error("XPAYMENTS returned an invalid Native transaction status");
-  if (parsed.data.data.storeCode !== storeCode) throw new Error(`XPAYMENTS Store mismatch: expected ${storeCode}`);
-  if (parsed.data.data.currency.toUpperCase() !== currency) throw new Error(`XPAYMENTS currency mismatch: expected ${currency}`);
-  return parsed.data.data;
+  for (const delayMs of retryDelaysMs) {
+    if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+
+    try {
+      const response = await fetch(`${apiBase()}/payments/transactions/${encodeURIComponent(transactionId)}`, {
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "x-api-key": apiKey,
+        },
+        signal: AbortSignal.timeout(8_000),
+        cache: "no-store",
+      });
+
+      if (!response.ok) throw new Error(`XPAYMENTS transaction lookup failed (${response.status})`);
+      const parsed = nativeTransactionStatusResponse.safeParse(await responsePayload(response));
+      if (!parsed.success || parsed.data.success === false) throw new Error("XPAYMENTS returned an invalid Native transaction status");
+      if (parsed.data.data.storeCode !== storeCode) throw new Error(`XPAYMENTS Store mismatch: expected ${storeCode}`);
+      if (parsed.data.data.currency.toUpperCase() !== currency) throw new Error(`XPAYMENTS currency mismatch: expected ${currency}`);
+      return parsed.data.data;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error("XPAYMENTS Native transaction lookup failed");
+    }
+  }
+
+  throw lastError ?? new Error("XPAYMENTS Native transaction lookup failed");
 }
 
 export async function getXPaymentsSession(sessionId: string, currency?: PaymentCurrency) {
