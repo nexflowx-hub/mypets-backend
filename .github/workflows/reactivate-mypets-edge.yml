@@ -1,4 +1,4 @@
-name: Reactivate MyPets edge route
+name: Reactivate MyPets production runtime
 
 on:
   push:
@@ -18,42 +18,75 @@ jobs:
       DEPLOY_KEY: ${{ secrets.MYPETS_VPS_SSH_KEY || secrets.VPS_SSH_KEY || secrets.SSH_PRIVATE_KEY }}
       DEPLOY_PORT: ${{ secrets.MYPETS_VPS_PORT || secrets.VPS_PORT || '22' }}
     steps:
-      - name: Reactivate MyPets Caddy site safely
+      - name: Restore MyPets API and edge safely
         uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ env.DEPLOY_HOST }}
           username: ${{ env.DEPLOY_USER }}
           key: ${{ env.DEPLOY_KEY }}
           port: ${{ env.DEPLOY_PORT }}
-          command_timeout: 5m
+          command_timeout: 8m
           script: |
             set -Eeuo pipefail
             EDGE=/srv/platform/edge
             SRC="$EDGE/paused/mypets.caddy"
             DST="$EDGE/sites/mypets.caddy"
-            STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
             test -f "$SRC"
             test -d "$EDGE/sites"
-            test -f "$EDGE/Caddyfile"
-            test ! -e "$DST" || cp -a "$DST" "$EDGE/history/mypets.caddy.before-$STAMP"
-            cp -a "$SRC" "$DST"
-            rollback() {
-              rm -f "$DST"
-              docker exec platform-caddy caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1 || true
-            }
-            trap rollback ERR
-            docker exec platform-caddy caddy validate --config /etc/caddy/Caddyfile
-            docker exec platform-caddy caddy reload --config /etc/caddy/Caddyfile
-            sleep 2
-            echo "=== TLS SNI after reload ==="
-            timeout 12 openssl s_client -connect 127.0.0.1:443 -servername api.mypets.lat </dev/null 2>&1 | grep -E 'subject=|issuer=|Verify return code|no peer certificate' || true
-            echo "=== Public probe (502 acceptable until API returns) ==="
-            code="$(curl -sS -o /tmp/mypets-edge-body -w '%{http_code}' --max-time 15 https://api.mypets.lat/health || true)"
-            echo "HTTP_CODE=$code"
-            if [ "$code" = "000" ]; then
-              echo "TLS route did not become reachable" >&2
-              exit 1
+            docker inspect mypets-api >/dev/null
+            docker network inspect platform_edge >/dev/null
+
+            echo "=== Start existing MyPets API ==="
+            docker update --restart unless-stopped mypets-api >/dev/null
+            docker start mypets-api >/dev/null || true
+            if ! docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{if eq $k "platform_edge"}}yes{{end}}{{end}}' mypets-api | grep -q yes; then
+              docker network connect platform_edge mypets-api
             fi
-            grep -q 'api.mypets.lat' "$DST"
+
+            echo "=== Wait for container health ==="
+            healthy=false
+            for i in $(seq 1 45); do
+              status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' mypets-api 2>/dev/null || true)"
+              echo "attempt=$i status=$status"
+              if [ "$status" = "healthy" ]; then healthy=true; break; fi
+              if [ "$status" = "exited" ] || [ "$status" = "dead" ]; then
+                docker logs --tail 120 mypets-api || true
+                exit 1
+              fi
+              sleep 2
+            done
+            [ "$healthy" = "true" ]
+
+            echo "=== Verify API from platform edge network ==="
+            docker exec platform-caddy wget -qO- --timeout=5 http://mypets-api:8081/health
+
+            echo "=== Prepare Caddy site ==="
+            cp -a "$SRC" "$DST"
+            rollback_edge() {
+              rm -f "$DST"
+              docker restart platform-caddy >/dev/null 2>&1 || true
+            }
+            trap rollback_edge ERR
+            docker exec platform-caddy caddy validate --config /etc/caddy/Caddyfile
+            docker restart platform-caddy >/dev/null
+
+            echo "=== Wait for public TLS/API ==="
+            public_ok=false
+            for i in $(seq 1 30); do
+              code="$(curl -sS -o /tmp/mypets-health.json -w '%{http_code}' --max-time 10 https://api.mypets.lat/health || true)"
+              echo "attempt=$i code=$code"
+              if [ "$code" = "200" ] && grep -q '"status":"ok"' /tmp/mypets-health.json; then
+                public_ok=true
+                break
+              fi
+              sleep 2
+            done
+            [ "$public_ok" = "true" ]
+
+            echo "=== Final state ==="
+            docker inspect -f 'status={{.State.Status}} restart={{.HostConfig.RestartPolicy.Name}} networks={{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' mypets-api
+            curl -fsS https://api.mypets.lat/health
+            echo
+            timeout 10 openssl s_client -connect 127.0.0.1:443 -servername api.mypets.lat </dev/null 2>&1 | grep -E 'subject=|issuer=|Verify return code' || true
             trap - ERR
-            echo "MYPETS_EDGE_ROUTE_REACTIVATED=YES"
+            echo "MYPETS_PRODUCTION_RUNTIME_RESTORED=YES"
