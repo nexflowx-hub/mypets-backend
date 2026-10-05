@@ -18,7 +18,7 @@ jobs:
       DEPLOY_KEY: ${{ secrets.MYPETS_VPS_SSH_KEY || secrets.VPS_SSH_KEY || secrets.SSH_PRIVATE_KEY }}
       DEPLOY_PORT: ${{ secrets.MYPETS_VPS_PORT || secrets.VPS_PORT || '22' }}
     steps:
-      - name: Inspect paused MyPets route and edge compose
+      - name: Inspect edge source of truth read-only
         uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ env.DEPLOY_HOST }}
@@ -28,13 +28,15 @@ jobs:
           command_timeout: 5m
           script: |
             set +e
-            echo "=== PAUSED MYPETS SITE ==="
-            cat /srv/platform/edge/paused/mypets.caddy 2>/dev/null || true
-            echo "=== EDGE COMPOSE ==="
-            cat /srv/platform/edge/compose.yml 2>/dev/null || cat /srv/platform/edge/docker-compose.yml 2>/dev/null || true
-            echo "=== PLATFORM CADDY NETWORKS ==="
-            docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} ip={{$v.IPAddress}}{{println}}{{end}}' platform-caddy
-            echo "=== MYPETS EDGE NETWORK DETAILS ==="
-            docker network inspect mypets_edge --format 'name={{.Name}} scope={{.Scope}} containers={{range $id,$c := .Containers}}{{$c.Name}} {{end}}' 2>/dev/null || true
-            echo "=== PLATFORM EDGE NETWORK DETAILS ==="
-            docker network inspect platform_edge --format 'name={{.Name}} scope={{.Scope}} containers={{range $id,$c := .Containers}}{{$c.Name}} {{end}}' 2>/dev/null || true
+            echo "=== EDGE DIRECTORY ==="
+            ls -la /srv/platform/edge
+            echo "=== EDGE GIT ==="
+            git -C /srv/platform/edge rev-parse --is-inside-work-tree 2>/dev/null || true
+            git -C /srv/platform/edge status --short 2>/dev/null || true
+            git -C /srv/platform/edge branch --show-current 2>/dev/null || true
+            git -C /srv/platform/edge remote -v 2>/dev/null || true
+            git -C /srv/platform/edge log -5 --oneline 2>/dev/null || true
+            echo "=== PAUSED FILE MTIME ==="
+            stat /srv/platform/edge/paused/mypets.caddy 2>/dev/null || true
+            echo "=== SITES DIR MTIMES ==="
+            ls -lah --time-style=long-iso /srv/platform/edge/sites /srv/platform/edge/paused 2>/dev/null || true
