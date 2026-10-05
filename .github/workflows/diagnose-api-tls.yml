@@ -26,7 +26,7 @@ jobs:
           test -n "${DEPLOY_USER:-}"
           test -n "${DEPLOY_KEY:-}"
 
-      - name: Inspect TLS termination read-only
+      - name: Inspect production containers read-only
         uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ env.DEPLOY_HOST }}
@@ -39,29 +39,35 @@ jobs:
             echo "=== host/time ==="
             hostname
             date -u
-            echo "=== MyPets container ==="
-            docker ps --filter name=mypets-api --format 'name={{.Names}} image={{.Image}} status={{.Status}} ports={{.Ports}}'
-            curl -fsS --max-time 5 http://127.0.0.1:8081/health || true
-            echo
-            echo "=== listeners 80/443 ==="
-            ss -ltnp | grep -E ':(80|443)\b' || true
-            echo "=== service status ==="
-            for svc in nginx caddy apache2 traefik; do
-              printf '%s=' "$svc"
-              systemctl is-active "$svc" 2>/dev/null || true
+            echo "=== all containers ==="
+            docker ps -a --format 'name={{.Names}} image={{.Image}} status={{.Status}} ports={{.Ports}}'
+            echo "=== compose projects ==="
+            docker compose ls -a 2>/dev/null || true
+            echo "=== MyPets compose state ==="
+            if [ -f /srv/apps/mypets/api/deploy/compose.yml ]; then
+              docker compose -p mypets -f /srv/apps/mypets/api/deploy/compose.yml ps -a || true
+            fi
+            echo "=== MyPets checkout state ==="
+            if [ -d /srv/apps/mypets/api/.git ]; then
+              git -C /srv/apps/mypets/api rev-parse HEAD || true
+              git -C /srv/apps/mypets/api status --short || true
+            fi
+            echo "=== listeners 80/443/8081 ==="
+            ss -ltnp | grep -E ':(80|443|8081)\b' || true
+            echo "=== containers publishing 443 ==="
+            for cid in $(docker ps -q --filter publish=443); do
+              docker inspect -f 'name={{.Name}} image={{.Config.Image}} networks={{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$cid" || true
+              echo "--- mounts ---"
+              docker inspect -f '{{range .Mounts}}{{.Source}} -> {{.Destination}} ({{.Mode}}){{println}}{{end}}' "$cid" || true
+              echo "--- last logs ---"
+              docker logs --tail 160 "$cid" 2>&1 || true
             done
-            echo "=== config references for api.mypets.lat ==="
-            grep -Rni --exclude='*.key' --exclude='*.pem' 'api\.mypets\.lat' /etc/nginx /etc/caddy /etc/traefik 2>/dev/null | head -80 || true
-            echo "=== nginx syntax ==="
-            command -v nginx >/dev/null && nginx -t 2>&1 || true
-            echo "=== certbot inventory ==="
-            command -v certbot >/dev/null && certbot certificates 2>&1 || true
-            echo "=== letsencrypt live dirs ==="
-            find /etc/letsencrypt/live -maxdepth 2 -type l -printf '%p -> %l\n' 2>/dev/null | head -120 || true
-            echo "=== local SNI openssl ==="
-            timeout 12 openssl s_client -connect 127.0.0.1:443 -servername api.mypets.lat -showcerts </dev/null 2>&1 | head -120 || true
-            echo "=== local SNI curl ==="
-            curl -4 -vk --resolve api.mypets.lat:443:127.0.0.1 --max-time 12 https://api.mypets.lat/health 2>&1 | tail -100 || true
-            echo "=== recent TLS service logs ==="
-            journalctl -u nginx --since '24 hours ago' --no-pager 2>/dev/null | tail -120 || true
-            journalctl -u caddy --since '24 hours ago' --no-pager 2>/dev/null | tail -120 || true
+            echo "=== MyPets API stopped-container logs ==="
+            for cid in $(docker ps -aq --filter name=mypets-api); do
+              docker inspect -f 'name={{.Name}} image={{.Config.Image}} status={{.State.Status}} exit={{.State.ExitCode}} error={{.State.Error}} started={{.State.StartedAt}} finished={{.State.FinishedAt}}' "$cid" || true
+              docker logs --tail 200 "$cid" 2>&1 || true
+            done
+            echo "=== local API probe ==="
+            curl -v --max-time 5 http://127.0.0.1:8081/health 2>&1 || true
+            echo "=== local TLS probe ==="
+            timeout 10 openssl s_client -connect 127.0.0.1:443 -servername api.mypets.lat </dev/null 2>&1 | head -80 || true
