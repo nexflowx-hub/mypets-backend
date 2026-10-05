@@ -1,0 +1,59 @@
+name: Reactivate MyPets edge route
+
+on:
+  push:
+    branches:
+      - diag/api-tls-vps-20261005
+
+permissions:
+  contents: read
+
+jobs:
+  reactivate:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      DEPLOY_HOST: ${{ secrets.MYPETS_VPS_HOST || secrets.VPS_HOST || secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.MYPETS_VPS_USER || secrets.VPS_USER || secrets.SSH_USER }}
+      DEPLOY_KEY: ${{ secrets.MYPETS_VPS_SSH_KEY || secrets.VPS_SSH_KEY || secrets.SSH_PRIVATE_KEY }}
+      DEPLOY_PORT: ${{ secrets.MYPETS_VPS_PORT || secrets.VPS_PORT || '22' }}
+    steps:
+      - name: Reactivate MyPets Caddy site safely
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: ${{ env.DEPLOY_HOST }}
+          username: ${{ env.DEPLOY_USER }}
+          key: ${{ env.DEPLOY_KEY }}
+          port: ${{ env.DEPLOY_PORT }}
+          command_timeout: 5m
+          script: |
+            set -Eeuo pipefail
+            EDGE=/srv/platform/edge
+            SRC="$EDGE/paused/mypets.caddy"
+            DST="$EDGE/sites/mypets.caddy"
+            STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+            test -f "$SRC"
+            test -d "$EDGE/sites"
+            test -f "$EDGE/Caddyfile"
+            test ! -e "$DST" || cp -a "$DST" "$EDGE/history/mypets.caddy.before-$STAMP"
+            cp -a "$SRC" "$DST"
+            rollback() {
+              rm -f "$DST"
+              docker exec platform-caddy caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1 || true
+            }
+            trap rollback ERR
+            docker exec platform-caddy caddy validate --config /etc/caddy/Caddyfile
+            docker exec platform-caddy caddy reload --config /etc/caddy/Caddyfile
+            sleep 2
+            echo "=== TLS SNI after reload ==="
+            timeout 12 openssl s_client -connect 127.0.0.1:443 -servername api.mypets.lat </dev/null 2>&1 | grep -E 'subject=|issuer=|Verify return code|no peer certificate' || true
+            echo "=== Public probe (502 acceptable until API returns) ==="
+            code="$(curl -sS -o /tmp/mypets-edge-body -w '%{http_code}' --max-time 15 https://api.mypets.lat/health || true)"
+            echo "HTTP_CODE=$code"
+            if [ "$code" = "000" ]; then
+              echo "TLS route did not become reachable" >&2
+              exit 1
+            fi
+            grep -q 'api.mypets.lat' "$DST"
+            trap - ERR
+            echo "MYPETS_EDGE_ROUTE_REACTIVATED=YES"
