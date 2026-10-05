@@ -1,0 +1,67 @@
+name: Diagnose MyPets API TLS
+
+on:
+  push:
+    branches:
+      - diag/api-tls-vps-20261005
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      DEPLOY_HOST: ${{ secrets.MYPETS_VPS_HOST || secrets.VPS_HOST || secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.MYPETS_VPS_USER || secrets.VPS_USER || secrets.SSH_USER }}
+      DEPLOY_KEY: ${{ secrets.MYPETS_VPS_SSH_KEY || secrets.VPS_SSH_KEY || secrets.SSH_PRIVATE_KEY }}
+      DEPLOY_PORT: ${{ secrets.MYPETS_VPS_PORT || secrets.VPS_PORT || '22' }}
+    steps:
+      - name: Check deploy credentials
+        run: |
+          set -euo pipefail
+          test -n "${DEPLOY_HOST:-}"
+          test -n "${DEPLOY_USER:-}"
+          test -n "${DEPLOY_KEY:-}"
+
+      - name: Inspect TLS termination read-only
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: ${{ env.DEPLOY_HOST }}
+          username: ${{ env.DEPLOY_USER }}
+          key: ${{ env.DEPLOY_KEY }}
+          port: ${{ env.DEPLOY_PORT }}
+          command_timeout: 5m
+          script: |
+            set +e
+            echo "=== host/time ==="
+            hostname
+            date -u
+            echo "=== MyPets container ==="
+            docker ps --filter name=mypets-api --format 'name={{.Names}} image={{.Image}} status={{.Status}} ports={{.Ports}}'
+            curl -fsS --max-time 5 http://127.0.0.1:8081/health || true
+            echo
+            echo "=== listeners 80/443 ==="
+            ss -ltnp | grep -E ':(80|443)\b' || true
+            echo "=== service status ==="
+            for svc in nginx caddy apache2 traefik; do
+              printf '%s=' "$svc"
+              systemctl is-active "$svc" 2>/dev/null || true
+            done
+            echo "=== config references for api.mypets.lat ==="
+            grep -Rni --exclude='*.key' --exclude='*.pem' 'api\.mypets\.lat' /etc/nginx /etc/caddy /etc/traefik 2>/dev/null | head -80 || true
+            echo "=== nginx syntax ==="
+            command -v nginx >/dev/null && nginx -t 2>&1 || true
+            echo "=== certbot inventory ==="
+            command -v certbot >/dev/null && certbot certificates 2>&1 || true
+            echo "=== letsencrypt live dirs ==="
+            find /etc/letsencrypt/live -maxdepth 2 -type l -printf '%p -> %l\n' 2>/dev/null | head -120 || true
+            echo "=== local SNI openssl ==="
+            timeout 12 openssl s_client -connect 127.0.0.1:443 -servername api.mypets.lat -showcerts </dev/null 2>&1 | head -120 || true
+            echo "=== local SNI curl ==="
+            curl -4 -vk --resolve api.mypets.lat:443:127.0.0.1 --max-time 12 https://api.mypets.lat/health 2>&1 | tail -100 || true
+            echo "=== recent TLS service logs ==="
+            journalctl -u nginx --since '24 hours ago' --no-pager 2>/dev/null | tail -120 || true
+            journalctl -u caddy --since '24 hours ago' --no-pager 2>/dev/null | tail -120 || true
