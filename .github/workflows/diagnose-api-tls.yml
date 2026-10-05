@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - diag/api-tls-vps-20261005
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -19,14 +18,7 @@ jobs:
       DEPLOY_KEY: ${{ secrets.MYPETS_VPS_SSH_KEY || secrets.VPS_SSH_KEY || secrets.SSH_PRIVATE_KEY }}
       DEPLOY_PORT: ${{ secrets.MYPETS_VPS_PORT || secrets.VPS_PORT || '22' }}
     steps:
-      - name: Check deploy credentials
-        run: |
-          set -euo pipefail
-          test -n "${DEPLOY_HOST:-}"
-          test -n "${DEPLOY_USER:-}"
-          test -n "${DEPLOY_KEY:-}"
-
-      - name: Inspect MyPets exit and Caddy config read-only
+      - name: Inspect exact MyPets edge configuration
         uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ env.DEPLOY_HOST }}
@@ -36,19 +28,19 @@ jobs:
           command_timeout: 5m
           script: |
             set +e
-            echo "=== mypets-api state ==="
-            docker inspect -f 'status={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{.State.Error}} started={{.State.StartedAt}} finished={{.State.FinishedAt}} restart={{.HostConfig.RestartPolicy.Name}} restart_count={{.RestartCount}} memory={{.HostConfig.Memory}}' mypets-api 2>/dev/null || true
-            echo "=== mypets-api last 60 logs ==="
-            docker logs --tail 60 mypets-api 2>&1 || true
-            echo "=== MyPets compose file ==="
-            sed -n '1,220p' /srv/apps/mypets/api/deploy/compose.yml 2>/dev/null || true
-            echo "=== edge Caddyfile ==="
-            sed -n '1,260p' /srv/platform/edge/Caddyfile 2>/dev/null || true
-            echo "=== edge MyPets site references ==="
-            grep -Rni -B6 -A24 'mypets\.lat\|api\.mypets\.lat\|mypets-api' /srv/platform/edge/sites /srv/platform/edge/Caddyfile 2>/dev/null | head -260 || true
-            echo "=== caddy validate ==="
-            docker exec platform-caddy caddy validate --config /etc/caddy/Caddyfile 2>&1 || true
-            echo "=== caddy certificates matching mypets ==="
-            docker exec platform-caddy sh -lc 'find /data -type f | grep -i mypets | head -80' 2>/dev/null || true
-            echo "=== caddy logs only MyPets/TLS errors ==="
-            docker logs --since 48h platform-caddy 2>&1 | grep -Ei 'mypets|tls|certificate|handshake|acme' | tail -220 || true
+            echo "=== CURRENT COMPOSE ==="
+            cat /srv/apps/mypets/api/deploy/compose.yml
+            echo "=== MY PETS NETWORKS ==="
+            docker network ls --format 'name={{.Name}} driver={{.Driver}}'
+            for n in mypets_edge platform_edge; do
+              echo "--- network $n ---"
+              docker network inspect "$n" --format '{{range $id,$c := .Containers}}{{$c.Name}} {{end}}' 2>/dev/null || true
+            done
+            echo "=== EDGE CADDYFILE ==="
+            cat /srv/platform/edge/Caddyfile 2>/dev/null || true
+            echo "=== EDGE SITE FILES ==="
+            find /srv/platform/edge/sites -maxdepth 2 -type f -print -exec sh -c 'echo "--- {} ---"; sed -n "1,220p" "{}"' \; 2>/dev/null || true
+            echo "=== MY PETS REFERENCES ==="
+            grep -Rni -B8 -A24 -E 'api\.mypets\.lat|mypets\.lat|mypets-api|mypets_edge' /srv/platform/edge 2>/dev/null || true
+            echo "=== CADDY ADAPTED MY PETS REFERENCES ==="
+            docker exec platform-caddy caddy adapt --config /etc/caddy/Caddyfile --pretty 2>/dev/null | grep -n -B8 -A30 -E 'api\.mypets\.lat|mypets-api|mypets_edge' || true
