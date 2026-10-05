@@ -18,7 +18,7 @@ jobs:
       DEPLOY_KEY: ${{ secrets.MYPETS_VPS_SSH_KEY || secrets.VPS_SSH_KEY || secrets.SSH_PRIVATE_KEY }}
       DEPLOY_PORT: ${{ secrets.MYPETS_VPS_PORT || secrets.VPS_PORT || '22' }}
     steps:
-      - name: Inspect exact MyPets edge configuration
+      - name: Inspect paused MyPets route and edge compose
         uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ env.DEPLOY_HOST }}
@@ -28,19 +28,13 @@ jobs:
           command_timeout: 5m
           script: |
             set +e
-            echo "=== CURRENT COMPOSE ==="
-            cat /srv/apps/mypets/api/deploy/compose.yml
-            echo "=== MY PETS NETWORKS ==="
-            docker network ls --format 'name={{.Name}} driver={{.Driver}}'
-            for n in mypets_edge platform_edge; do
-              echo "--- network $n ---"
-              docker network inspect "$n" --format '{{range $id,$c := .Containers}}{{$c.Name}} {{end}}' 2>/dev/null || true
-            done
-            echo "=== EDGE CADDYFILE ==="
-            cat /srv/platform/edge/Caddyfile 2>/dev/null || true
-            echo "=== EDGE SITE FILES ==="
-            find /srv/platform/edge/sites -maxdepth 2 -type f -print -exec sh -c 'echo "--- {} ---"; sed -n "1,220p" "{}"' \; 2>/dev/null || true
-            echo "=== MY PETS REFERENCES ==="
-            grep -Rni -B8 -A24 -E 'api\.mypets\.lat|mypets\.lat|mypets-api|mypets_edge' /srv/platform/edge 2>/dev/null || true
-            echo "=== CADDY ADAPTED MY PETS REFERENCES ==="
-            docker exec platform-caddy caddy adapt --config /etc/caddy/Caddyfile --pretty 2>/dev/null | grep -n -B8 -A30 -E 'api\.mypets\.lat|mypets-api|mypets_edge' || true
+            echo "=== PAUSED MYPETS SITE ==="
+            cat /srv/platform/edge/paused/mypets.caddy 2>/dev/null || true
+            echo "=== EDGE COMPOSE ==="
+            cat /srv/platform/edge/compose.yml 2>/dev/null || cat /srv/platform/edge/docker-compose.yml 2>/dev/null || true
+            echo "=== PLATFORM CADDY NETWORKS ==="
+            docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} ip={{$v.IPAddress}}{{println}}{{end}}' platform-caddy
+            echo "=== MYPETS EDGE NETWORK DETAILS ==="
+            docker network inspect mypets_edge --format 'name={{.Name}} scope={{.Scope}} containers={{range $id,$c := .Containers}}{{$c.Name}} {{end}}' 2>/dev/null || true
+            echo "=== PLATFORM EDGE NETWORK DETAILS ==="
+            docker network inspect platform_edge --format 'name={{.Name}} scope={{.Scope}} containers={{range $id,$c := .Containers}}{{$c.Name}} {{end}}' 2>/dev/null || true
