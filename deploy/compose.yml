@@ -11,6 +11,7 @@ services:
     networks:
       - mypets_internal
       - mypets_edge
+      - platform_edge
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8081/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 30s
@@ -24,4 +25,7 @@ networks:
     driver: bridge
   mypets_edge:
     name: mypets_edge
+    external: true
+  platform_edge:
+    name: platform_edge
     external: true
