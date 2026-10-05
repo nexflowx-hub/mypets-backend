@@ -23,20 +23,21 @@ log "Checking repository safety"
 git -C "$APP_DIR" fetch --prune origin main
 git -C "$APP_DIR" checkout main
 git -C "$APP_DIR" merge --ff-only origin/main
+
 HEAD_SHA="$(git -C "$APP_DIR" rev-parse HEAD)"
 printf 'Backend HEAD: %s\n' "$HEAD_SHA"
-git -C "$APP_DIR" merge-base --is-ancestor "$EXPECTED_MIN_HEAD" "$HEAD_SHA" || fail "main does not contain the internal alerts release"
+git -C "$APP_DIR" merge-base --is-ancestor "$EXPECTED_MIN_HEAD" "$HEAD_SHA"   || fail "main does not contain the internal alerts release"
 
 [ -f "$APP_DIR/supabase/migrations/$MIGRATION" ] || fail "Missing migration $MIGRATION"
+
 DB_URL="$(sed -n 's/^DIRECT_URL=//p' "$ENV_FILE" | tail -1)"
 [ -n "$DB_URL" ] || fail "DIRECT_URL is missing"
 
 log "Applying internal alerts + Telegram outbox migration"
-docker run --rm -e DIRECT_URL="$DB_URL" -v "$APP_DIR/supabase:/sql:ro" postgres:16-alpine \
-  sh -ec "psql \"\$DIRECT_URL\" -v ON_ERROR_STOP=1 -f /sql/migrations/$MIGRATION"
+docker run --rm   -e DIRECT_URL="$DB_URL"   -v "$APP_DIR/supabase:/sql:ro"   postgres:16-alpine   sh -ec "psql \"\$DIRECT_URL\" -v ON_ERROR_STOP=1 -f /sql/migrations/$MIGRATION"
 
 log "Verifying internal alert database contract"
-docker run --rm -i -e DIRECT_URL="$DB_URL" postgres:16-alpine sh -ec 'psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -At' <<'SQL'
+docker run --rm -i   -e DIRECT_URL="$DB_URL"   postgres:16-alpine   sh -ec 'psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -At' <<'SQL'
 select 'alerts_table=' || to_regclass('public.internal_alerts');
 select 'deliveries_table=' || to_regclass('public.internal_alert_deliveries');
 select 'alerts_rls=' || relrowsecurity from pg_class where oid='public.internal_alerts'::regclass;
@@ -53,10 +54,15 @@ log "Waiting for API health"
 for _ in $(seq 1 45); do
   status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$API_CONTAINER" 2>/dev/null || true)"
   [ "$status" = "healthy" ] && break
-  [ "$status" = "unhealthy" ] && { docker logs --tail 180 "$API_CONTAINER" || true; fail "MyPets API became unhealthy"; }
+  if [ "$status" = "unhealthy" ]; then
+    docker logs --tail 180 "$API_CONTAINER" || true
+    fail "MyPets API became unhealthy"
+  fi
   sleep 2
 done
-[ "$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$API_CONTAINER")" = "healthy" ] || fail "MyPets API did not become healthy"
+
+status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$API_CONTAINER" 2>/dev/null || true)"
+[ "$status" = "healthy" ] || fail "MyPets API did not become healthy"
 
 log "Verifying public API"
 curl -fsS https://api.mypets.lat/health
@@ -66,45 +72,22 @@ curl -fsS https://api.mypets.lat/v1/config >/dev/null
 log "Checking alert runtime mode"
 if grep -q '^TELEGRAM_ALERT_ENABLED=true$' "$ENV_FILE"; then
   echo "TELEGRAM_ALERT_ENABLED=true"
-  if grep -q '^TELEGRAM_ALERT_BOT_TOKEN=
-else
-  echo "Telegram delivery remains disabled. Internal event/ticket logging is active."
-fi
 
-log "Recent API alert dispatcher logs"
-docker logs --since 3m "$API_CONTAINER" 2>&1 | grep -E 'Telegram internal alert|mypets-api' | tail -20 || true
+  token_line="$(sed -n 's/^TELEGRAM_ALERT_BOT_TOKEN=//p' "$ENV_FILE" | tail -1)"
+  chat_line="$(sed -n 's/^TELEGRAM_ALERT_CHAT_ID=//p' "$ENV_FILE" | tail -1)"
 
-echo
-echo "============================================================"
-echo "MyPets Internal Alerts + Telegram V1 is deployed."
-echo "Internal event/ticket logging is active."
-echo "Telegram delivery is controlled only by server-side env vars."
-echo "Payments and customer-facing flows do not depend on Telegram."
-echo "============================================================"
- "$ENV_FILE" || grep -q '^TELEGRAM_ALERT_CHAT_ID=
-else
-  echo "Telegram delivery remains disabled. Internal event/ticket logging is active."
-fi
-
-log "Recent API alert dispatcher logs"
-docker logs --since 3m "$API_CONTAINER" 2>&1 | grep -E 'Telegram internal alert|mypets-api' | tail -20 || true
-
-echo
-echo "============================================================"
-echo "MyPets Internal Alerts + Telegram V1 is deployed."
-echo "Internal event/ticket logging is active."
-echo "Telegram delivery is controlled only by server-side env vars."
-echo "Payments and customer-facing flows do not depend on Telegram."
-echo "============================================================"
- "$ENV_FILE"; then
-    echo "WARNING: Telegram is enabled but bot token/chat id appears empty."
+  if [ -z "$token_line" ] || [ -z "$chat_line" ]; then
+    echo "WARNING: Telegram is enabled but bot token/chat id is missing."
+  else
+    echo "Telegram credentials are present."
   fi
+  unset token_line chat_line
 else
   echo "Telegram delivery remains disabled. Internal event/ticket logging is active."
 fi
 
 log "Recent API alert dispatcher logs"
-docker logs --since 3m "$API_CONTAINER" 2>&1 | grep -E 'Telegram internal alert|mypets-api' | tail -20 || true
+docker logs --since 3m "$API_CONTAINER" 2>&1   | grep -E 'Telegram internal alert|Internal alert|mypets-api'   | tail -30 || true
 
 echo
 echo "============================================================"
